@@ -1,14 +1,15 @@
 ##############################################################################
-# Moodle Plugin CI - development (accelerated) pipeline - {{COMPONENT}}
+# Moodle Plugin CI - development (accelerated) pipeline - local_lticompletionsync
 #
 # Runs on push / PR to every branch EXCEPT main. Parallel jobs: phplint gates
 # phpunit; codeanalysis (phpcs blocking; phpmd/phpcpd advisory) and quality
-# (phpdoc/savepoints/validate) run in parallel and gate ci-complete. PHP-only
-# plugin: no grunt / mustache steps. Reduced matrix spanning Moodle 4.5/5.0/5.2.
+# (phpdoc/savepoints/validate) run in parallel and gate ci-complete. No grunt /
+# mustache steps (templates are checked locally, docs/TESTING.md).
+# Reduced matrix spanning Moodle 4.5/5.0/5.3.
 # The full sequential matrix runs on main via moodle-plugin-ci-main.yml.
 #
-# {{PLUGINTITLE}} has no external plugin dependencies; add-plugin only pulls the
-# sibling plugins required by this component's hard dependency graph.
+# The plugin has no plugin dependencies; moodle-plugin-ci installs it alone
+# (the LTI family plugins are independent of each other).
 ##############################################################################
 
 name: Moodle Plugin CI Dev
@@ -101,7 +102,7 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Moodle Code Checker
         if: ${{ always() }}
-        run: set -o pipefail; moodle-plugin-ci codechecker --max-warnings 0 --exclude=PSR1.Classes.ClassDeclaration,moodle.Commenting.TodoComment 2>&1 | tee ci-logs/codechecker.log
+        run: set -o pipefail; moodle-plugin-ci codechecker --max-warnings 0 --exclude=PSR1.Classes.ClassDeclaration,moodle.Commenting.TodoComment plugin 2>&1 | tee ci-logs/codechecker.log
       - name: PHP Mess Detector
         continue-on-error: true
         if: ${{ always() }}
@@ -161,9 +162,6 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Install Moodle, dependencies and plugin (no test init)
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1 --no-init
         env:
           DB: pgsql
@@ -197,7 +195,7 @@ jobs:
     needs: [lint-php]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_USER: 'postgres'
           POSTGRES_HOST_AUTH_METHOD: 'trust'
@@ -205,7 +203,7 @@ jobs:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
       mariadb:
-        image: mariadb:10.11
+        image: mariadb:${{ matrix.maria }}
         env:
           MYSQL_USER: 'root'
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
@@ -216,9 +214,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql }
-          - { moodle: MOODLE_500_STABLE, php: '8.2', database: mariadb }
-          - { moodle: MOODLE_502_STABLE, php: '8.3', database: pgsql }
+          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_500_STABLE, php: '8.2', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql, pg: '17', maria: '11.4' }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -244,9 +242,6 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Install Moodle, dependencies and plugin
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: ${{ matrix.database }}
@@ -306,9 +301,6 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Install Moodle, dependencies and plugin
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}} --branch development
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: mariadb
@@ -316,7 +308,7 @@ jobs:
       - name: Behat features
         id: behat
         if: ${{ always() }}
-        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@{{COMPONENT}}&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
+        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@local_lticompletionsync&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
       - name: Collect error summary and Behat dumps
         if: ${{ always() }}
         run: |

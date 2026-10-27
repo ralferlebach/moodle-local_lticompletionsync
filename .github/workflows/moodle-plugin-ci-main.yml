@@ -1,10 +1,11 @@
 ##############################################################################
-# Moodle Plugin CI - main (release) pipeline - {{COMPONENT}}
+# Moodle Plugin CI - main (release) pipeline - local_lticompletionsync
 #
 # Runs ONLY on push / PR to main; provides the "CI complete" status check for
 # branch protection. Full SEQUENTIAL pipeline per matrix cell across the
-# supported Moodle 4.5/5.0/5.2 x PHP x DB matrix. PHP-only plugin: no grunt /
-# mustache. The fast parallel pipeline lives in moodle-plugin-ci-dev.yml.
+# supported Moodle 4.5 to 5.3 x PHP x DB matrix. No grunt / mustache steps: the
+# plugin's templates are checked locally (docs/TESTING.md). The fast parallel
+# pipeline lives in moodle-plugin-ci-dev.yml.
 ##############################################################################
 
 name: Moodle Plugin CI Main
@@ -27,7 +28,7 @@ jobs:
     runs-on: ubuntu-22.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_USER: 'postgres'
           POSTGRES_HOST_AUTH_METHOD: 'trust'
@@ -35,7 +36,7 @@ jobs:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
       mariadb:
-        image: mariadb:10.11
+        image: mariadb:${{ matrix.maria }}
         env:
           MYSQL_USER: 'root'
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
@@ -46,14 +47,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql }
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: mariadb }
-          - { moodle: MOODLE_405_STABLE, php: '8.2', database: pgsql }
-          - { moodle: MOODLE_405_STABLE, php: '8.3', database: mariadb }
-          - { moodle: MOODLE_500_STABLE, php: '8.2', database: pgsql }
-          - { moodle: MOODLE_500_STABLE, php: '8.3', database: mariadb }
-          - { moodle: MOODLE_502_STABLE, php: '8.3', database: pgsql }
-          - { moodle: MOODLE_502_STABLE, php: '8.3', database: mariadb }
+          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_405_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_500_STABLE, php: '8.2', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_500_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_501_STABLE, php: '8.3', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_501_STABLE, php: '8.4', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_502_STABLE, php: '8.3', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_502_STABLE, php: '8.4', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql, pg: '17', maria: '11.4' }
+          - { moodle: MOODLE_503_STABLE, php: '8.4', database: mariadb, pg: '17', maria: '11.4' }
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -81,9 +84,6 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Install Moodle, dependencies and plugin
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: ${{ matrix.database }}
@@ -117,7 +117,7 @@ jobs:
       - name: Behat features
         id: behat
         if: ${{ always() }}
-        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@{{COMPONENT}}&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
+        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@local_lticompletionsync&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
       - name: Collect error summary
         if: ${{ always() }}
         run: |
@@ -150,47 +150,6 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  ecosystem-lockstep:
-    name: Ecosystem version lockstep
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Check out plugin
-        uses: actions/checkout@v4
-        with:
-          path: plugin
-
-      - name: All four {{PLUGINTITLE}} plugins must ship the same version
-        run: |
-          get_version() {
-            grep -oE '\$plugin->version[[:space:]]*=[[:space:]]*[0-9]+' "$1"               | grep -oE '[0-9]+$'
-          }
-          own=$(get_version plugin/version.php)
-          echo "This plugin: $own"
-          rc=0
-          for sib in auth enrol mod tool; do
-            git clone --depth 1 --branch main               "https://github.com/{{GITHUBUSER}}/moodle-${sib}_{{PLUGINNAME}}.git" "/tmp/$sib" >/dev/null 2>&1
-            sibver=$(get_version "/tmp/$sib/version.php")
-            echo "  ${sib}_{{PLUGINNAME}}: $sibver"
-            if [[ "$sibver" != "$own" ]]; then
-              echo "  MISMATCH: expected $own"
-              rc=1
-            fi
-          done
-          if [[ $rc -ne 0 ]]; then
-            # Four separate repositories can only be pushed one after another, so during a rollout
-            # the siblings are legitimately still on the previous version. Failing here would make
-            # the first three pushes red every single time - the gate would be noise, not a gate.
-            # It is therefore enforced where "released together" is actually claimed: on a tag.
-            if [[ "${{ github.ref_type }}" == "tag" ]]; then
-              echo "Release gate: a tagged release requires all four plugins at one version."
-              exit 1
-            fi
-            echo "::warning::Ecosystem versions differ - expected while a rollout is in progress."
-            echo "Kein Fehler: auf einem Branch-Push wird der Gleichstand nur berichtet."
-            exit 0
-          fi
-          echo "All four plugins are in lockstep."
-
   release-artefact:
     name: Release artefact contents
     runs-on: ubuntu-22.04
@@ -202,7 +161,7 @@ jobs:
         run: |
           # git archive is what honours .gitattributes export-ignore. Building the artefact here
           # means the gate tests the file set that is actually shipped, not the working tree.
-          git archive --format=tar --prefix={{PLUGINNAME}}/ HEAD > /tmp/release.tar
+          git archive --format=tar --prefix=lticompletionsync/ HEAD > /tmp/release.tar
           tar -tf /tmp/release.tar > /tmp/release.list
           echo "Artefakt enthält $(wc -l < /tmp/release.list) Einträge."
 
@@ -210,9 +169,9 @@ jobs:
         run: |
           rc=0
           while read -r forbidden; do
-            if grep -qE "^{{PLUGINNAME}}/${forbidden}" /tmp/release.list; then
+            if grep -qE "^lticompletionsync/${forbidden}" /tmp/release.list; then
               echo "VERBOTEN im Release-Artefakt: $forbidden"
-              grep -E "^{{PLUGINNAME}}/${forbidden}" /tmp/release.list | head -5
+              grep -E "^lticompletionsync/${forbidden}" /tmp/release.list | head -5
               rc=1
             fi
           done <<'PATTERNS'
@@ -234,7 +193,7 @@ jobs:
 
       - name: The artefact must still contain what Moodle runs
         run: |
-          for required in {{PLUGINNAME}}/version.php {{PLUGINNAME}}/lang {{PLUGINNAME}}/db; do
+          for required in lticompletionsync/version.php lticompletionsync/lang lticompletionsync/db; do
             if ! grep -q "^${required}" /tmp/release.list; then
               echo "FEHLT im Release-Artefakt: $required"
               exit 1
@@ -277,11 +236,8 @@ jobs:
           sudo locale-gen en_AU.UTF-8
           echo "NVM_DIR=$HOME/.nvm" >> $GITHUB_ENV
 
-      - name: Install Moodle and the plugin ecosystem
+      - name: Install Moodle and the plugin
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: pgsql
@@ -305,16 +261,15 @@ jobs:
             exit 1
           fi
           echo "Report: $report"
-          # The gate measures THIS plugin only. Counting every path containing '{{PLUGINNAME}}' would
-          # also include the three sibling plugins that are installed alongside but whose tests do
-          # not run here - that produced a meaningless 0.5% and made the gate useless.
+          # The gate measures THIS plugin only (its install path, without tests/): the Moodle core
+          # code in the report would otherwise dominate the figure and make the gate meaningless.
           php plugin/tools/coverage_gate.php "$report" "$COVERAGE_FLOOR"
         env:
           COVERAGE_FLOOR: '50'
 
   maturity-gate:
     name: Release gate
-    needs: [test, ecosystem-lockstep, release-artefact, coverage]
+    needs: [test, release-artefact, coverage]
     runs-on: ubuntu-22.04
     # Without always() this job is skipped whenever one of its dependencies fails - and a skipped
     # job is not re-executed by "re-run failed jobs", so it stays skipped for good and keeps
@@ -329,7 +284,7 @@ jobs:
           # This job is the single place where the release gates are judged, so it reports each
           # result and fails on any that is not green - whatever the declared maturity is.
           rc=0
-          for entry in             "test=${{ needs.test.result }}"             "ecosystem-lockstep=${{ needs.ecosystem-lockstep.result }}"             "release-artefact=${{ needs.release-artefact.result }}"             "coverage=${{ needs.coverage.result }}"; do
+          for entry in             "test=${{ needs.test.result }}"             "release-artefact=${{ needs.release-artefact.result }}"             "coverage=${{ needs.coverage.result }}"; do
             echo "  ${entry%%=*}: ${entry#*=}"
             if [[ "${entry#*=}" != "success" ]]; then
               rc=1
@@ -386,7 +341,7 @@ jobs:
           # Every gate is named individually. The previous message printed only two of them, so a
           # failure in any other job looked like an unexplained red build.
           rc=0
-          # Only the two aggregating jobs are evaluated here. The matrix, lockstep, artefact and
+          # Only the two aggregating jobs are evaluated here. The matrix, artefact and
           # coverage results are judged once, inside maturity-gate; checking them here as well
           # duplicated the same condition in two places.
           for entry in             "maturity-gate=${{ needs.maturity-gate.result }}"             "stale-files=${{ needs.stale-files.result }}"; do

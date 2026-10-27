@@ -17,17 +17,17 @@
 /**
  * Plugin version and metadata.
  *
- * @package    {{COMPONENT}}
- * @copyright  {{YEAR}} {{AUTHOR}}
+ * @package    local_lticompletionsync
+ * @copyright  2026 Ralf Erlebach
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->component = '{{COMPONENT}}';
-$plugin->version   = {{VERSION}};
+$plugin->component = 'local_lticompletionsync';
+$plugin->version   = 2026102601;
 $plugin->requires  = 2024100700; // Moodle 4.5.
-$plugin->supported = [405, 502];
+$plugin->supported = [405, 503];
 $plugin->maturity  = MATURITY_ALPHA;
 $plugin->release   = '0.1.0';
 

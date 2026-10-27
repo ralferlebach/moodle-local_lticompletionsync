@@ -15,26 +15,23 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Upgrade steps for {{COMPONENT}}.
+ * Upgrade steps for local_lticompletionsync.
  *
  * Ship this file from the start: Moodle calls the function on every version bump, and the
  * validation of the Moodle plugins directory rejects a plugin without it.
  *
- * @package    {{COMPONENT}}
- * @copyright  {{YEAR}} {{AUTHOR}}
+ * @package    local_lticompletionsync
+ * @copyright  2026 Ralf Erlebach
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 /**
- * Upgrade the {{COMPONENT}} plugin.
+ * Upgrade the local_lticompletionsync plugin.
  *
  * @param int $oldversion The version we are upgrading from.
  * @return bool
  */
-function xmldb_{{PLUGINNAME}}_upgrade($oldversion) {
-    // Add steps as "if ($oldversion < <version>) { ... upgrade_plugin_savepoint(...); }".
-    //
-    // Never declare DEFAULT="" on a CHAR NOT NULL column: XMLDB emits a debugging message for it,
-    // and moodle-plugin-ci treats any debugging message during PHPUnit initialisation as a failure.
+function xmldb_local_lticompletionsync_upgrade($oldversion) {
+    // Release 0.1.0 is the first release: the schema is created from db/install.xml, no step is needed yet.
     return true;
 }

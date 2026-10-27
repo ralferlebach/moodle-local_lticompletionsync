@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/lticompletionsync/db" VERSION="20261026" COMMENT="XMLDB file for Moodle local/lticompletionsync"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="local_lticompletionsync_con" COMMENT="Connection register. One row per LTI 1.3 connection and role (sender on the tool side, receiver on the platform side).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="role" TYPE="char" LENGTH="8" NOTNULL="true" SEQUENCE="false" COMMENT="sender or receiver"/>
+        <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Administratively confirmed and active"/>
+        <FIELD NAME="ltitypeid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Receiver: lti_types.id of the LTI 1.3 tool that may send"/>
+        <FIELD NAME="registrationid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Sender: enrol_lti_app_registration.id of the platform"/>
+        <FIELD NAME="deploymentid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Sender: enrol_lti_deployment.id"/>
+        <FIELD NAME="issuer" TYPE="char" LENGTH="1333" NOTNULL="false" SEQUENCE="false" COMMENT="Sender: platform issuer (informational copy)"/>
+        <FIELD NAME="clientid" TYPE="char" LENGTH="1333" NOTNULL="false" SEQUENCE="false" COMMENT="Client id of the tool at the platform"/>
+        <FIELD NAME="endpointurl" TYPE="char" LENGTH="1333" NOTNULL="false" SEQUENCE="false" COMMENT="Sender: completion endpoint of the platform"/>
+        <FIELD NAME="automanage" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Receiver: every manual-completion activity of the tool type is managed without per-activity opt-in"/>
+        <FIELD NAME="lockdown" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Receiver: prohibit learner self-toggling on managed activities"/>
+        <FIELD NAME="conflictpolicy" TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT="provider" SEQUENCE="false" COMMENT="Receiver: provider (re-assert) or local (keep a local override and report a conflict)"/>
+        <FIELD NAME="agsprogress" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Sender: optional tool-only AGS progress on a dedicated line item"/>
+        <FIELD NAME="partnerstatus" TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT="unknown" SEQUENCE="false" COMMENT="Sender: unknown, plugin, disabled, noplugin or error"/>
+        <FIELD NAME="partnerversion" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="Sender: release reported by the partner plugin"/>
+        <FIELD NAME="timechecked" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="roletarget" UNIQUE="true" FIELDS="role, ltitypeid, registrationid, deploymentid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_lticompletionsync_act" COMMENT="Receiver: mod_lti activities whose completion is managed by the provider.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lockedroleid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Role whose togglecompletion capability this plugin prohibited in the module context (0 = none)"/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="cmid" UNIQUE="true" FIELDS="cmid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_lticompletionsync_out" COMMENT="Sender: desired provider state and delivery state per connection, resource link and user (outbox).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="connectionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="resourcelinkid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="enrol_lti_resource_link.id"/>
+        <FIELD NAME="toolid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="enrol_lti_tools.id of the published resource"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Local user on the tool side"/>
+        <FIELD NAME="sourcekind" TYPE="char" LENGTH="8" NOTNULL="true" SEQUENCE="false" COMMENT="cm or course"/>
+        <FIELD NAME="sourceid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Course module id or course id"/>
+        <FIELD NAME="desiredstate" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 completed, 0 not completed"/>
+        <FIELD NAME="version" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Monotonic version of the desired state"/>
+        <FIELD NAME="statetime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Strictly increasing time stamp of the desired state"/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false" COMMENT="Correlation id of the current version"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="pending, sent, acked, retry, dead or blocked"/>
+        <FIELD NAME="sentversion" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="ackversion" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="ackstatus" TYPE="char" LENGTH="16" NOTNULL="false" SEQUENCE="false" COMMENT="received, validated, applied or rejected as reported by the receiver"/>
+        <FIELD NAME="attempts" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="nextattempt" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lasterror" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="Error or rejection code, never a token or a payload"/>
+        <FIELD NAME="agsstatus" TYPE="char" LENGTH="16" NOTNULL="false" SEQUENCE="false" COMMENT="Tool-only AGS progress level: sent, unsupported or error"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="connectionid" TYPE="foreign" FIELDS="connectionid" REFTABLE="local_lticompletionsync_con" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="target" UNIQUE="true" FIELDS="connectionid, resourcelinkid, userid"/>
+        <INDEX NAME="due" UNIQUE="false" FIELDS="status, nextattempt"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_lticompletionsync_rcv" COMMENT="Receiver: state reported by the provider and local application state per connection, activity and user.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="connectionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="remoteversion" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Highest validated provider version"/>
+        <FIELD NAME="remotestate" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="remotetime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="appliedversion" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT="received" SEQUENCE="false" COMMENT="received, validated, applied, rejected or conflict"/>
+        <FIELD NAME="reason" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="connectionid" TYPE="foreign" FIELDS="connectionid" REFTABLE="local_lticompletionsync_con" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="target" UNIQUE="true" FIELDS="connectionid, cmid, userid"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="cmid" UNIQUE="false" FIELDS="cmid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_lticompletionsync_jti" COMMENT="Receiver: replay protection, hashes of accepted message ids until they expire.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="jtihash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="sha256 of connection id and jti"/>
+        <FIELD NAME="connectionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="expires" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="jtihash" UNIQUE="true" FIELDS="jtihash"/>
+        <INDEX NAME="expires" UNIQUE="false" FIELDS="expires"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_lticompletionsync_log" COMMENT="Transfer journal for the reduced status view (standard event names, codes only, no tokens or payloads).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="connectionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="eventname" TYPE="char" LENGTH="32" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Local user concerned, 0 when none"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="version" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="detail" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="Short code, never a token"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="correlationid" UNIQUE="false" FIELDS="correlationid"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+        <INDEX NAME="courseid" UNIQUE="false" FIELDS="courseid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>

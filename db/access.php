@@ -15,23 +15,43 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Capability definitions for {{COMPONENT}}.
+ * Capability definitions.
  *
- * @package    {{COMPONENT}}
- * @copyright  {{YEAR}} {{AUTHOR}}
+ * @package    local_lticompletionsync
+ * @copyright  2026 Ralf Erlebach
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
 
-// Grant capabilities to archetypes deliberately and check them in the context the action belongs
-// to. A course-level decision asked in the system context silently ignores role switching,
-// because Moodle suspends the administrator bypass only for the context being switched.
 $capabilities = [
-    '{{PLUGINTYPE}}/{{PLUGINNAME}}:view' => [
+    // Manage the connection register (both roles), run reconciles, requeue dead letters.
+    'local/lticompletionsync:manageconnections' => [
+        'riskbitmask' => RISK_CONFIG,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes' => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+    // Switch provider-managed completion (and its learner lockdown) on or off for one LTI activity.
+    'local/lticompletionsync:manageactivity' => [
+        'riskbitmask' => RISK_CONFIG,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_MODULE,
+        'archetypes' => [
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW,
+        ],
+        'clonepermissionsfrom' => 'moodle/course:manageactivities',
+    ],
+    // See the transfer state of the course's users (names and states).
+    'local/lticompletionsync:viewstatus' => [
+        'riskbitmask' => RISK_PERSONAL,
         'captype' => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => [
+            'teacher' => CAP_ALLOW,
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
