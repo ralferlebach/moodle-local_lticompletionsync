@@ -70,6 +70,15 @@ if ($managed) {
     $facts->data[] = [get_string('lockdown', 'local_lticompletionsync'),
         $lock['applied'] ? get_string('yes') : get_string('no')];
     $facts->data[] = [get_string('lockdown_open', 'local_lticompletionsync'), (int) $lock['users']];
+    $permname = function (?int $permission): string {
+        $names = [CAP_ALLOW => 'allow', CAP_PREVENT => 'prevent', CAP_PROHIBIT => 'prohibit'];
+        return $permission === null ? get_string('none') :
+            (isset($names[$permission]) ? get_string($names[$permission], 'core_role') : (string) $permission);
+    };
+    $facts->data[] = [get_string('lockdown_override', 'local_lticompletionsync'), $permname($lock['override'])];
+    if ($lock['applied']) {
+        $facts->data[] = [get_string('lockdown_prior', 'local_lticompletionsync'), $permname($lock['prior'])];
+    }
 }
 echo html_writer::table($facts);
 echo html_writer::div(get_string('lockdown_sideeffect', 'local_lticompletionsync'), 'alert alert-info');

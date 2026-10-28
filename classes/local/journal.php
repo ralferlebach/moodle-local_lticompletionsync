@@ -75,7 +75,7 @@ class journal {
         if (!protocol::valid_correlation_id($correlationid)) {
             $correlationid = '00000000-0000-0000-0000-000000000000';
         }
-        $detail = \core_text::substr(clean_param($detail, PARAM_NOTAGS), 0, 255);
+        $detail = \core_text::substr(self::redact(clean_param($detail, PARAM_NOTAGS)), 0, 255);
         $DB->insert_record(self::TABLE, (object) [
             'correlationid' => $correlationid,
             'connectionid' => $connectionid,
@@ -108,6 +108,20 @@ class journal {
             $params['relateduserid'] = $userid;
         }
         $class::create($params)->trigger();
+    }
+
+    /**
+     * Audit redaction: details are codes, but anything that looks like a credential is removed defensively before it
+     * reaches the journal or the standard log (a JWT/JWS, a bearer token, a PEM block, a long opaque token).
+     *
+     * @param string $text
+     * @return string
+     */
+    public static function redact(string $text): string {
+        $text = preg_replace('/-----BEGIN [A-Z ]+-----.*?(-----END [A-Z ]+-----|$)/s', '[redacted-key]', $text);
+        $text = preg_replace('/eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?/', '[redacted-jwt]', $text);
+        $text = preg_replace('/\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]+/i', '$1 [redacted]', $text);
+        return preg_replace('/[A-Za-z0-9_\-+\/]{48,}={0,2}/', '[redacted-token]', $text);
     }
 
     /**

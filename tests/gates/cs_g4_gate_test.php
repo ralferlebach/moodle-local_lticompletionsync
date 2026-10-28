@@ -225,9 +225,10 @@ final class cs_g4_gate_test extends \advanced_testcase {
      */
     public function test_step2_lockdown_blocks_learner_toggle_but_not_the_adapter(): void {
         $cm = $this->lti(COMPLETION_TRACKING_MANUAL);
-        $roleid = completion_adapter::lockdown($cm);
+        [$roleid, $prior] = completion_adapter::lockdown($cm);
         $this->assertGreaterThan(0, $roleid);
-        $this->assertSame([], completion_adapter::users_who_can_toggle($cm));
+        $this->assertNull($prior);
+        $this->assertSame(['count' => 0, 'sample' => []], completion_adapter::users_who_can_toggle($cm));
 
         $this->setUser($this->student);
         try {
@@ -254,8 +255,11 @@ final class cs_g4_gate_test extends \advanced_testcase {
         $this->assertTrue(has_capability(completion_adapter::TOGGLE_CAPABILITY, $othercontext, $this->student));
 
         // And it is reversible.
-        completion_adapter::release_lockdown($cm, $roleid);
-        $this->assertSame([(int) $this->student->id], completion_adapter::users_who_can_toggle($cm));
+        $this->assertSame(
+            completion_adapter::RELEASE_REMOVED,
+            completion_adapter::release_lockdown($cm->context, $roleid, true, $prior)
+        );
+        $this->assertSame(['count' => 1, 'sample' => [(int) $this->student->id]], completion_adapter::users_who_can_toggle($cm));
     }
 
     /**
@@ -281,8 +285,10 @@ final class cs_g4_gate_test extends \advanced_testcase {
     }
 
     /**
-     * Step 2 (side effect): core still renders the manual completion button for a locked-down learner; the click
-     * then fails server side. This is a documented UX limitation, not hidden with CSS.
+     * Step 2 (side effect): core's completion details still say "show the manual control" for a locked-down learner:
+     * cm_completion_details::show_manual_completion() does not look at the capability (no hook there). The plugin's
+     * learner view takes the supported activity-header path instead (tests/learner_view_test.php); the course page
+     * keeps the control (documented, annotated as unavailable).
      */
     public function test_step2_side_effect_button_still_rendered(): void {
         $cm = $this->lti(COMPLETION_TRACKING_MANUAL);
@@ -388,7 +394,9 @@ final class cs_g4_gate_test extends \advanced_testcase {
         $offenders = [];
         foreach ($it as $file) {
             $path = $file->getPathname();
-            if (substr($path, -4) !== '.php' || strpos($path, '/tests/') !== false) {
+            // Runtime code only: tests and the dev tools (tools/load seeds completion data on scratch sites) are not
+            // reachable from Moodle.
+            if (substr($path, -4) !== '.php' || strpos($path, '/tests/') !== false || strpos($path, '/tools/') !== false) {
                 continue;
             }
             $src = file_get_contents($path);

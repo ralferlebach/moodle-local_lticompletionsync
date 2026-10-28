@@ -31,8 +31,8 @@ MUTATIONS = [
     {
         'name': 'revocation (CS-G5): a provider state 0 is never recorded',
         'file': 'classes/local/sender/outbox.php',
-        'old': "                if ((int) $row->desiredstate === $state) {",
-        'new': "                if ((int) $row->desiredstate === $state || $state === 0) {",
+        'old': "                if ((int) $row->desiredstate === $state && !$force) {",
+        'new': "                if (((int) $row->desiredstate === $state || $state === 0) && !$force) {",
         'filter': 'loopback_flow_test::test_revocation|state_test::test_outbox_versions',
     },
     {
@@ -45,8 +45,8 @@ MUTATIONS = [
     {
         'name': 'out-of-order (CS-G5): an older version is applied',
         'file': 'classes/local/receiver/processor.php',
-        'old': "        if ($msg['version'] < (int) $row->remoteversion) {",
-        'new': "        if (false) {",
+        'old': "        } else if ($msg['version'] < (int) $row->remoteversion) {",
+        'new': "        } else if (false) {",
         'filter': 'loopback_flow_test::test_out_of_order',
     },
     {
@@ -59,9 +59,9 @@ MUTATIONS = [
     {
         'name': 'learner lockdown (CS-G4 step 2): CAP_PREVENT instead of CAP_PROHIBIT',
         'file': 'classes/local/completion_adapter.php',
-        'old': "        assign_capability(self::TOGGLE_CAPABILITY, CAP_PROHIBIT, $roleid, $context->id, true);",
-        'new': "        assign_capability(self::TOGGLE_CAPABILITY, CAP_PREVENT, $roleid, $context->id, true);\n"
-               "        unassign_capability(self::TOGGLE_CAPABILITY, $roleid, $context->id);",
+        'old': "            assign_capability(self::TOGGLE_CAPABILITY, CAP_PROHIBIT, $roleid, $context->id, true);",
+        'new': "            assign_capability(self::TOGGLE_CAPABILITY, CAP_PREVENT, $roleid, $context->id, true);\n"
+               "            unassign_capability(self::TOGGLE_CAPABILITY, $roleid, $context->id);",
         'filter': 'cs_g4_gate_test::test_step2_lockdown|loopback_flow_test::test_completion_arrives',
     },
     {
@@ -70,6 +70,83 @@ MUTATIONS = [
         'old': "            !$audok || ($claims['sub'] ?? null) !== $clientid",
         'new': "            ($claims['sub'] ?? null) !== $clientid",
         'filter': 'loopback_flow_test::test_authentication_negatives',
+    },
+    {
+        'name': 'prior override (CS-02): the release ignores the remembered override',
+        'file': 'classes/local/completion_adapter.php',
+        'old': "        if ($priorrecorded && $prior !== null && $prior !== CAP_INHERIT) {",
+        'new': "        if (false) {",
+        'filter': 'lockdown_overrides_test',
+    },
+    {
+        'name': 'administrator decision (CS-02): the release overwrites a changed prohibition',
+        'file': 'classes/local/completion_adapter.php',
+        'old': "        if (self::current_override($context, $roleid) !== CAP_PROHIBIT) {\n            return self::RELEASE_KEPT;",
+        'new': "        if (false) {\n            return self::RELEASE_KEPT;",
+        'filter': 'lockdown_overrides_test::test_later',
+    },
+    {
+        'name': 'learner UI (CS-02): the activity header keeps the dead-end control',
+        'file': 'classes/local/receiver/learner_view.php',
+        'old': "            $page->activityheader->set_hidecompletion(true);",
+        'new': "",
+        'filter': 'learner_view_test',
+    },
+    {
+        'name': 'client ids (CS-03): case-insensitive client id lookup',
+        'file': 'classes/local/connection.php',
+        'old': "            $DB->sql_equal('clientid', ':clientid', true, true),",
+        'new': "            $DB->sql_equal('clientid', ':clientid', false, false),",
+        'filter': 'trust_test::test_foreign',
+    },
+    {
+        'name': 'audit redaction (CS-06): credentials reach the journal',
+        'file': 'classes/local/journal.php',
+        'old': "    public static function redact(string $text): string {\n",
+        'new': "    public static function redact(string $text): string {\n        return $text;\n",
+        'filter': 'report_test',
+    },
+    {
+        'name': 'account merge: a joined target keeps both rows',
+        'file': 'classes/local/merge_integration.php',
+        'old': "            $joined++;\n",
+        'new': "            $joined++;\n            $DB->set_field($table, 'userid', $toid, ['id' => $row->id]);\n            continue;\n",
+        'filter': 'merge_integration_test',
+    },
+    {
+        'name': 'pseudonym API (fail closed): an older translator is used anyway',
+        'file': 'classes/local/receiver/identity_resolver.php',
+        'old': "        if ($api > 0 && $api < self::MIN_TRANSLATOR_API) {",
+        'new': "        if (false) {",
+        'filter': 'identity_api_test',
+    },
+    {
+        'name': 'bounded outage (CS-04): every due row probes and posts',
+        'file': 'classes/local/sender/dispatcher.php',
+        'old': "            if (isset($this->probed[$cid])) {",
+        'new': "            if (false) {",
+        'filter': 'performance_test::test_delivery_run_is_bounded',
+    },
+    {
+        'name': 'retention (P1): course content deletion leaves the completion rows',
+        'file': 'classes/observer.php',
+        'old': "        \\local_lticompletionsync\\local\\orphan_cleanup::course_deleted((int) $event->objectid);\n",
+        'new': "",
+        'filter': 'orphan_cleanup_test::test_course_deletion',
+    },
+    {
+        'name': 'retention (P1): the sweep ignores its bound',
+        'file': 'classes/local/orphan_cleanup.php',
+        'old': "        return self::delete_ids($table, array_keys($DB->get_records_sql($sql, [], 0, $limit)));",
+        'new': "        return self::delete_ids($table, array_keys($DB->get_records_sql($sql)));",
+        'filter': 'orphan_cleanup_test::test_sweep',
+    },
+    {
+        'name': 'retention (P1): connections of deleted tool types survive the sweep',
+        'file': 'classes/local/orphan_cleanup.php',
+        'old': "            connection::delete((int) $id);\n",
+        'new': "",
+        'filter': 'orphan_cleanup_test::test_tool_type',
     },
 ]
 

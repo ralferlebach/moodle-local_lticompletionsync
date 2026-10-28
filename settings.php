@@ -75,6 +75,19 @@ if ($hassiteconfig) {
             60
         ));
         $settings->add(new admin_setting_configtext(
+            'local_lticompletionsync/batchlimit',
+            get_string('batchlimit', 'local_lticompletionsync'),
+            get_string('batchlimit_desc', 'local_lticompletionsync'),
+            500,
+            PARAM_INT
+        ));
+        $settings->add(new admin_setting_configduration(
+            'local_lticompletionsync/timebudget',
+            get_string('timebudget', 'local_lticompletionsync'),
+            get_string('timebudget_desc', 'local_lticompletionsync'),
+            120
+        ));
+        $settings->add(new admin_setting_configtext(
             'local_lticompletionsync/journalretention',
             get_string('journalretention', 'local_lticompletionsync'),
             get_string('journalretention_desc', 'local_lticompletionsync'),

@@ -40,6 +40,7 @@ class sweep_task extends \core\task\scheduled_task {
      * Run.
      */
     public function execute() {
+        \local_lticompletionsync\local\sender\source::reset_caches();
         $since = (int) get_config('local_lticompletionsync', 'lastsweep');
         $now = time();
         $count = reconciler::sweep($since > 0 ? $since - 60 : 0);

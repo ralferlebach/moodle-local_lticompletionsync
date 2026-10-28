@@ -39,6 +39,7 @@ class full_reconcile_task extends \core\task\scheduled_task {
      * Run.
      */
     public function execute() {
+        \local_lticompletionsync\local\sender\source::reset_caches();
         mtrace('local_lticompletionsync: full reconcile queued ' . reconciler::full() . ' new versions');
     }
 }

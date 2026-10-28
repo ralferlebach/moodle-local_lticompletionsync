@@ -217,7 +217,25 @@ class processor {
         global $DB;
         $row = self::state_row((int) $con->id, (int) $cm->id, $userid, $msg['correlation_id']);
         $result['appliedversion'] = (int) $row->appliedversion;
-        if ($msg['version'] < (int) $row->remoteversion) {
+        $subjecthash = hash('sha256', $msg['user']);
+        if ($row->subjecthash !== null && $row->subjecthash !== '' && $row->subjecthash !== $subjecthash) {
+            // Another subject's version sequence for the same local user (the platform merged two accounts, or a
+            // pseudonym was re-issued): versions of different sequences are not comparable, the provider time
+            // stamps are. A state older than the stored one never overrides it.
+            if ($msg['timestamp'] <= (int) $row->remotetime) {
+                journal::record(
+                    'reconciled',
+                    $msg['correlation_id'],
+                    (int) $con->id,
+                    $userid,
+                    (int) $cm->course,
+                    (int) $cm->id,
+                    $msg['version'],
+                    'superseded'
+                );
+                return ['status' => protocol::ACK_REJECTED, 'reason' => 'superseded', 'appliedversion' => 0] + $result;
+            }
+        } else if ($msg['version'] < (int) $row->remoteversion) {
             // Out of order: an older provider state never overrides a newer one.
             journal::record(
                 'reconciled',
@@ -230,8 +248,7 @@ class processor {
                 'stale:' . $row->remoteversion
             );
             return $result + ['status' => protocol::ACK_REJECTED, 'reason' => 'stale_version'];
-        }
-        if ($msg['version'] === (int) $row->remoteversion && $row->status !== protocol::ACK_RECEIVED) {
+        } else if ($msg['version'] === (int) $row->remoteversion && $row->status !== protocol::ACK_RECEIVED) {
             // Duplicate (retry after a lost response): answer from the stored state, apply nothing twice.
             journal::record(
                 'reconciled',
@@ -246,6 +263,7 @@ class processor {
             return $result + ['status' => $row->status, 'reason' => (string) $row->reason];
         }
 
+        $row->subjecthash = $subjecthash;
         $row->remoteversion = $msg['version'];
         $row->remotestate = $msg['state'];
         $row->remotetime = $msg['timestamp'];

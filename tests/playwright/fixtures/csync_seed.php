@@ -26,6 +26,16 @@
  *   --stage=state      native completion, override, grade and receiver row of a platform activity (JSON)
  *   --stage=replay     duplicate (same version) and out-of-order (older version) messages of the tool side
  *   --stage=cron       completion and plugin scheduled tasks on this site
+ *   --stage=storm      tool side: K new versions of a learner's row, each sent concurrently (curl_multi, separate
+ *                      php-fpm workers on the platform) with duplicates and byte-identical replays, in shuffled order
+ *   --stage=applied    platform side: applied/revoked versions of an activity in journal order, receiver row, state
+ *   --stage=resync     tool side: force resync of the scenario's connection (new version for every target)
+ *   --stage=retrynow   tool side: retry rows of the scenario's connection due now
+ *   --stage=requeue    tool side: requeue the dead letters of the scenario's connection (administrator action)
+ *   --stage=outrows    tool side: outbox rows of the scenario with their journal "sent" counts
+ *   --stage=sender     tool side: sender options of the scenario's connection (--agsprogress=0|1)
+ *   --stage=agsstate   platform side: grade items, line items, grades of the scenario's activity, completion
+ *   --stage=report     outcome report of this site (JSON, as cli/sync.php --report)
  * Output: one JSON object on the last line.
  *
  * Usage: LTI_WWWROOT=<site> php csync_seed.php --root=<moodle tree> --stage=... [options]
@@ -65,7 +75,8 @@ use local_lticompletionsync\local\protocol;
 [$o] = cli_get_params([
     'root' => '', 'stage' => '', 'scenario' => 'x', 'toolbase' => '', 'reusetype' => 0, 'issuer' => '', 'clientid' => '',
     'deploymentid' => '', 'endpoint' => '', 'typeid' => 0, 'loginurl' => '', 'uuid' => '', 'learners' => '', 'grade' => '',
-    'username' => '', 'cmid' => 0, 'action' => '', 'key' => '', 'from' => 0, 'corr' => '',
+    'username' => '', 'cmid' => 0, 'action' => '', 'key' => '', 'from' => 0, 'corr' => '', 'versions' => 6,
+    'agsprogress' => '', 'hours' => 1,
 ], []);
 \core\session\manager::set_user(get_admin());
 $scenario = clean_param($o['scenario'], PARAM_ALPHANUMEXT);
@@ -91,6 +102,57 @@ function csync_user(string $username): stdClass {
         update_internal_user_password($user, $password);
     }
     return $user;
+}
+
+/**
+ * The sender connection of a scenario (tool side), found through its published course.
+ *
+ * @param string $scenario
+ * @return stdClass
+ */
+function csync_sender(string $scenario): stdClass {
+    global $DB;
+    $toolid = (int) $DB->get_field_sql(
+        "SELECT t.id FROM {enrol_lti_tools} t JOIN {enrol} e ON e.id = t.enrolid
+           JOIN {course} c ON c.id = e.courseid WHERE c.shortname = ?",
+        ['CSYNC-T-' . $scenario]
+    );
+    $row = $DB->get_record_sql(
+        "SELECT * FROM {local_lticompletionsync_out} WHERE toolid = ? ORDER BY id",
+        [$toolid],
+        IGNORE_MULTIPLE
+    );
+    if ($row) {
+        return connection::get((int) $row->connectionid);
+    }
+    $dep = $DB->get_field_sql(
+        "SELECT DISTINCT rl.ltideploymentid FROM {enrol_lti_resource_link} rl WHERE rl.resourceid = ?",
+        [$toolid],
+        IGNORE_MULTIPLE
+    );
+    return $DB->get_record(
+        connection::TABLE,
+        ['role' => connection::ROLE_SENDER, 'deploymentid' => (int) $dep],
+        '*',
+        MUST_EXIST
+    );
+}
+
+/**
+ * Outbox rows of a scenario (tool side).
+ *
+ * @param string $scenario
+ * @return stdClass[]
+ */
+function csync_outrows(string $scenario): array {
+    global $DB;
+    return $DB->get_records_sql(
+        "SELECT o.* FROM {local_lticompletionsync_out} o
+           JOIN {enrol_lti_tools} t ON t.id = o.toolid JOIN {enrol} e ON e.id = t.enrolid
+           JOIN {course} c ON c.id = e.courseid
+          WHERE c.shortname = ? ORDER BY o.id",
+        ['CSYNC-T-' . $scenario]
+    );
 }
 
 /**
@@ -395,6 +457,184 @@ switch ($o['stage']) {
             'plugin_items' => array_map(fn($i) => ['source' => $i['source'], 'label' => (string) ($i['label'] ?? '')], $mine),
             'correlation_found' => $o['corr'] !== '' && strpos($json, $o['corr']) !== false,
             'logstore_events_whitelist' => \tool_ltidiagnostics\local\logstore_source::EVENTS];
+        break;
+
+    case 'storm':
+        // K new provider versions of the first row of the scenario, alternating states; each version is sent twice
+        // with different jtis (duplicate delivery) and once more byte-identical (replay); all requests go out at once.
+        $rows = csync_outrows($scenario);
+        $row = reset($rows);
+        $con = connection::get((int) $row->connectionid);
+        $reg = $DB->get_record('enrol_lti_app_registration', ['id' => $con->registrationid], '*', MUST_EXIST);
+        $dep = $DB->get_record('enrol_lti_deployment', ['id' => $con->deploymentid], '*', MUST_EXIST);
+        $rl = $DB->get_record('enrol_lti_resource_link', ['id' => $row->resourcelinkid], '*', MUST_EXIST);
+        $sub = \local_lticompletionsync\local\sender\source::subject((int) $row->userid, (int) $row->toolid);
+        $k = max(2, (int) $o['versions']);
+        $base = (int) $row->version;
+        $time = max(time(), (int) $row->statetime + 1);
+        $requests = [];
+        $state = (int) $row->desiredstate;
+        for ($i = 1; $i <= $k; $i++) {
+            $state = 1 - $state;
+            $msg = ['v' => 1, 'deployment_id' => $dep->deploymentid, 'type' => protocol::TYPE_COMPLETION,
+                'resource_link_id' => (string) $rl->resourcelinkid, 'user' => $sub, 'state' => protocol::state_name($state),
+                'activity_progress' => $state ? 'Completed' : 'Initialized', 'version' => $base + $i,
+                'timestamp' => $time + $i, 'correlation_id' => \core\uuid::generate(), 'source' => 'cm'];
+            foreach (['first', 'duplicate'] as $kind) {
+                $now = time();
+                $jws = \local_lticompletionsync\local\keys::tool_sign(['iss' => $reg->clientid, 'sub' => $reg->clientid,
+                    'aud' => $con->endpointurl, 'iat' => $now, 'exp' => $now + 120, 'jti' => bin2hex(random_bytes(16)),
+                    protocol::CLAIM => $msg]);
+                $requests[] = ['version' => $base + $i, 'kind' => $kind, 'jws' => $jws];
+                if ($kind === 'first') {
+                    $requests[] = ['version' => $base + $i, 'kind' => 'replay', 'jws' => $jws];
+                }
+            }
+        }
+        shuffle($requests);
+        // The tool's own row now holds the newest version (as if the changes had happened), due for normal delivery.
+        $DB->update_record('local_lticompletionsync_out', (object) ['id' => $row->id, 'version' => $base + $k,
+            'desiredstate' => $state, 'statetime' => $time + $k, 'status' => 'pending', 'attempts' => 0, 'nextattempt' => 0,
+            'correlationid' => \core\uuid::generate()]);
+        $multi = curl_multi_init();
+        $handles = [];
+        foreach ($requests as $i => $request) {
+            $ch = curl_init($con->endpointurl);
+            curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $request['jws'],
+                CURLOPT_HTTPHEADER => ['Content-Type: application/jwt'], CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 120, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2]);
+            curl_multi_add_handle($multi, $ch);
+            $handles[$i] = $ch;
+        }
+        $t = microtime(true);
+        do {
+            $status = curl_multi_exec($multi, $active);
+            if ($active) {
+                curl_multi_select($multi, 1.0);
+            }
+        } while ($active && $status === CURLM_OK);
+        $answers = [];
+        foreach ($handles as $i => $ch) {
+            $body = (string) curl_multi_getcontent($ch);
+            $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $claim = null;
+            if ($http === 200) {
+                $claim = \local_lticompletionsync\local\keys::peek($body)[1][protocol::CLAIM] ?? null;
+            }
+            $answers[] = ['version' => $requests[$i]['version'], 'kind' => $requests[$i]['kind'], 'http' => $http,
+                'status' => $claim['status'] ?? null, 'reason' => $claim['reason'] ?? null,
+                'error' => $http === 200 ? null : (json_decode($body, true)['error'] ?? curl_error($ch))];
+            curl_multi_remove_handle($multi, $ch);
+            curl_close($ch);
+        }
+        curl_multi_close($multi);
+        $out = ['base' => $base, 'final' => $base + $k, 'finalstate' => $state, 'requests' => count($requests),
+            'seconds' => round(microtime(true) - $t, 2), 'answers' => $answers];
+        break;
+
+    case 'applied':
+        $cmid = (int) $o['cmid'];
+        $user = $DB->get_record('user', ['username' => $o['username']], '*', MUST_EXIST);
+        $courseid = $DB->get_field('course_modules', 'course', ['id' => $cmid], MUST_EXIST);
+        $cm = get_fast_modinfo($courseid)->get_cm($cmid);
+        $data = (new completion_info(get_course($courseid)))->get_data($cm, false, $user->id);
+        $seq = $DB->get_records_select(
+            'local_lticompletionsync_log',
+            'cmid = :cmid AND userid = :u AND eventname IN (:a, :r)',
+            ['cmid' => $cmid, 'u' => $user->id, 'a' => 'completion_applied', 'r' => 'completion_revoked'],
+            'id',
+            'id, eventname, version'
+        );
+        $rcv = $DB->get_record('local_lticompletionsync_rcv', ['cmid' => $cmid, 'userid' => $user->id]);
+        $out = ['state' => (int) $data->completionstate,
+            'sequence' => array_values(array_map(fn($r) => ['event' => $r->eventname, 'version' => (int) $r->version], $seq)),
+            'rcv' => $rcv ? ['status' => $rcv->status, 'remoteversion' => (int) $rcv->remoteversion,
+                'appliedversion' => (int) $rcv->appliedversion, 'remotestate' => (int) $rcv->remotestate] : null,
+            'completionevents' => $DB->count_records_select(
+                'logstore_standard_log',
+                'eventname = :e AND contextinstanceid = :cmid AND relateduserid = :u',
+                ['e' => '\\core\\event\\course_module_completion_updated', 'cmid' => $cmid, 'u' => $user->id]
+            ),
+            'replays' => $DB->count_records_select('local_lticompletionsync_jti', '1 = 1')];
+        break;
+
+    case 'resync':
+        \core\cron::setup_user();
+        $con = csync_sender($scenario);
+        \local_lticompletionsync\local\sender\source::reset_caches();
+        $out = ['versions' => \local_lticompletionsync\local\sender\reconciler::full((int) $con->id, true)];
+        break;
+
+    case 'retrynow':
+        $con = csync_sender($scenario);
+        $out = ['due' => \local_lticompletionsync\local\sender\outbox::retry_now((int) $con->id)];
+        break;
+
+    case 'requeue':
+        $con = csync_sender($scenario);
+        $out = ['requeued' => \local_lticompletionsync\local\sender\outbox::requeue_connection((int) $con->id)];
+        break;
+
+    case 'outrows':
+        $rows = csync_outrows($scenario);
+        $out = ['rows' => array_values(array_map(function ($r) use ($DB) {
+            return ['id' => (int) $r->id, 'userid' => (int) $r->userid, 'status' => $r->status, 'version' => (int) $r->version,
+                'ackversion' => (int) $r->ackversion, 'attempts' => (int) $r->attempts, 'lasterror' => $r->lasterror,
+                'agsstatus' => $r->agsstatus, 'correlationid' => $r->correlationid,
+                'sent' => $DB->count_records('local_lticompletionsync_log', ['correlationid' => $r->correlationid,
+                    'eventname' => 'sent'])];
+        }, $rows))];
+        break;
+
+    case 'sender':
+        $con = csync_sender($scenario);
+        if ($o['agsprogress'] !== '') {
+            $DB->set_field(connection::TABLE, 'agsprogress', (int) $o['agsprogress'], ['id' => $con->id]);
+        }
+        if ($o['action'] === 'resetpartner') {
+            $DB->set_field(connection::TABLE, 'partnerstatus', connection::PARTNER_UNKNOWN, ['id' => $con->id]);
+        }
+        $con = connection::get((int) $con->id);
+        $out = ['id' => (int) $con->id, 'agsprogress' => (int) $con->agsprogress, 'partnerstatus' => $con->partnerstatus,
+            'level' => \local_lticompletionsync\local\status_report::level($con)];
+        break;
+
+    case 'agsstate':
+        $cmid = (int) $o['cmid'];
+        $user = $DB->get_record('user', ['username' => $o['username']], '*', MUST_EXIST);
+        $courseid = (int) $DB->get_field('course_modules', 'course', ['id' => $cmid], MUST_EXIST);
+        $instance = (int) $DB->get_field('course_modules', 'instance', ['id' => $cmid]);
+        $cm = get_fast_modinfo($courseid)->get_cm($cmid);
+        $data = (new completion_info(get_course($courseid)))->get_data($cm, false, $user->id);
+        $items = [];
+        // Items of the activity and every item behind a line item of the course (mod_lti creates tool line items as
+        // grade items of its own kind).
+        $gis = $DB->get_records('grade_items', ['courseid' => $courseid, 'itemtype' => 'mod', 'itemmodule' => 'lti'], 'id');
+        if ($DB->get_manager()->table_exists('ltiservice_gradebookservices')) {
+            $gids = $DB->get_fieldset_select('ltiservice_gradebookservices', 'gradeitemid', 'courseid = ?', [$courseid]);
+            foreach ($gids as $gid) {
+                $gis += $DB->get_records('grade_items', ['id' => $gid]);
+            }
+        }
+        foreach ($gis as $gi) {
+            $gg = $DB->get_record('grade_grades', ['itemid' => $gi->id, 'userid' => $user->id]);
+            $items[] = ['id' => (int) $gi->id, 'itemtype' => $gi->itemtype, 'iteminstance' => (int) $gi->iteminstance,
+                'itemnumber' => (int) $gi->itemnumber,
+                'itemname' => $gi->itemname, 'grademax' => (float) $gi->grademax,
+                'grade' => $gg ? ($gg->finalgrade === null ? null : (float) $gg->finalgrade) : 'none',
+                'history' => (int) $DB->count_records('grade_grades_history', ['itemid' => $gi->id, 'userid' => $user->id])];
+        }
+        $lineitems = $DB->get_manager()->table_exists('ltiservice_gradebookservices') ?
+            array_values(array_map(
+                fn($r) => ['gradeitemid' => (int) $r->gradeitemid, 'tag' => $r->tag,
+                'resourceid' => $r->resourceid, 'ltilinkid' => (int) $r->ltilinkid],
+                $DB->get_records('ltiservice_gradebookservices', ['courseid' => $courseid])
+            )) : [];
+        $out = ['instance' => $instance, 'state' => (int) $data->completionstate, 'items' => $items, 'lineitems' => $lineitems];
+        break;
+
+    case 'report':
+        $out = \local_lticompletionsync\local\status_report::outcomes(max(1, (int) $o['hours']) * HOURSECS);
         break;
 
     default:

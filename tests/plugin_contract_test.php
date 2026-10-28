@@ -41,14 +41,21 @@ final class plugin_contract_test extends \advanced_testcase {
             $this->assertLessThanOrEqual(28, strlen($name));
             $this->assertTrue($dbman->table_exists($name), $name);
         }
-        require_once($CFG->dirroot . '/local/lticompletionsync/db/upgrade.php');
-        $this->assertTrue(xmldb_local_lticompletionsync_upgrade(2026102600));
         $plugin = new \stdClass();
         require($CFG->dirroot . '/local/lticompletionsync/version.php');
+        $this->assertEquals($plugin->version, get_config('local_lticompletionsync', 'version'));
         $this->assertSame(2024100700, $plugin->requires);
         $this->assertSame([405, 503], $plugin->supported);
-        $this->assertSame('0.1.0', $plugin->release);
-        $this->assertEquals($plugin->version, get_config('local_lticompletionsync', 'version'));
+        $this->assertSame('0.2.0', $plugin->release);
+        $this->assertSame(2026102701, $plugin->version);
+        // The upgrade function runs idempotently on the current schema (details: upgrade_test).
+        require_once($CFG->libdir . '/upgradelib.php');
+        require_once($CFG->dirroot . '/local/lticompletionsync/db/upgrade.php');
+        set_config('version', 2026102601, 'local_lticompletionsync');
+        ob_start();
+        $this->assertTrue(xmldb_local_lticompletionsync_upgrade(2026102601));
+        ob_end_clean();
+        $this->assertEquals(2026102701, get_config('local_lticompletionsync', 'version'));
     }
 
     /**

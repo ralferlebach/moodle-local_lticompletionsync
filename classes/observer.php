@@ -72,6 +72,27 @@ class observer {
     }
 
     /**
+     * Course contents deleted (course deletion, restore with deletion): remove the rows of the course and of its
+     * activities (core removes the modules without course_module_deleted events).
+     *
+     * @param \core\event\course_content_deleted $event
+     */
+    public static function course_content_deleted(\core\event\course_content_deleted $event): void {
+        \local_lticompletionsync\local\orphan_cleanup::course_deleted((int) $event->objectid);
+    }
+
+    /**
+     * Enrolment instance deleted: an enrol_lti published resource may be gone with its outbox rows.
+     *
+     * @param \core\event\enrol_instance_deleted $event
+     */
+    public static function enrol_instance_deleted(\core\event\enrol_instance_deleted $event): void {
+        if (($event->other['enrol'] ?? '') === 'lti') {
+            \local_lticompletionsync\local\orphan_cleanup::sweep();
+        }
+    }
+
+    /**
      * User deleted: delete the state rows and journal entries of the user.
      *
      * @param \core\event\user_deleted $event

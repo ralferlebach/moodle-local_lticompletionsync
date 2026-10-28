@@ -38,6 +38,15 @@ $observers = [
         'callback' => '\local_lticompletionsync\observer::course_module_deleted',
     ],
     [
+        // Every course deletion and every "delete contents" restore (core does not trigger course_module_deleted then).
+        'eventname' => '\core\event\course_content_deleted',
+        'callback' => '\local_lticompletionsync\observer::course_content_deleted',
+    ],
+    [
+        'eventname' => '\core\event\enrol_instance_deleted',
+        'callback' => '\local_lticompletionsync\observer::enrol_instance_deleted',
+    ],
+    [
         'eventname' => '\core\event\user_deleted',
         'callback' => '\local_lticompletionsync\observer::user_deleted',
     ],

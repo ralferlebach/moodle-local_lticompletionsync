@@ -45,7 +45,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->build_env(['automanage' => false]);
         activity_manager::set_managed($this->pcm, true);
-        $this->assertSame([], completion_adapter::users_who_can_toggle($this->pcm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($this->pcm)['sample']);
 
         $actions = \core_courseformat\formatactions::cm($this->pcourse);
         if (method_exists($actions, 'duplicate')) {
@@ -63,7 +63,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->runAdhocTasks('\\local_lticompletionsync\\task\\lockdown_task');
         ob_end_clean();
         $this->assertGreaterThan(0, (int) activity_manager::get((int) $newcm->id)->lockedroleid);
-        $this->assertSame([], completion_adapter::users_who_can_toggle($newcm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($newcm)['sample']);
     }
 
     /**
@@ -114,7 +114,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->runAdhocTasks('\\local_lticompletionsync\\task\\lockdown_task');
         ob_end_clean();
         $newcm = get_fast_modinfo($target->id)->get_cm((int) $newcmid);
-        $this->assertSame([], completion_adapter::users_who_can_toggle($newcm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($newcm)['sample']);
         $this->assertFalse($DB->record_exists('local_lticompletionsync_rcv', ['cmid' => $newcmid]));
         $this->assertNotEmpty($learner);
     }
@@ -128,7 +128,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->build_env(['automanage' => false]);
         activity_manager::set_managed($this->pcm, true);
         activity_manager::set_managed($this->pcm, false);
-        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($this->pcm));
+        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($this->pcm)['sample']);
         $this->assertFalse(activity_manager::is_managed($this->pcm));
         $actions = \core_courseformat\formatactions::cm($this->pcourse);
         if (method_exists($actions, 'delete')) {

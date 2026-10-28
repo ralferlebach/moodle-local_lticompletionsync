@@ -146,7 +146,7 @@ final class loopback_flow_test extends \advanced_testcase {
             $this->assertContains($event, $events);
         }
         // Lockdown was applied by automatic management: no tracked learner can self-toggle.
-        $this->assertSame([], completion_adapter::users_who_can_toggle($cm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($cm)['sample']);
         $this->assertSame('cooperative', status_report::level(connection::get((int) $this->sender->id))['key']);
     }
 

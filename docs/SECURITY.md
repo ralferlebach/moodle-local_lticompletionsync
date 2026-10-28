@@ -20,6 +20,9 @@
 | Forged acknowledgement | answer is a JWS of the platform key (mod_lti), verified with the platform key set registered in enrol_lti; `iss`, `aud`, `in_reply_to = request jti` checked; only `applied` with `appliedversion ≥ version` counts | integration tests via the real endpoint; `keys_test` |
 | Late / duplicated delivery | monotonic versions per target; older versions refused, same version answered from storage | `test_out_of_order_old_version_is_rejected`, `test_lost_answer_retry_is_idempotent`, E2E; mutation killed |
 | Identity confusion | `sub` resolved as local id only without pseudonym policy; with ltisource_ltipseudonym only through its translator; any miss fails closed | `test_unresolvable_identity_fails_closed`, `test_pseudonym_integration_and_rotation`; mutation killed |
+| Foreign / ambiguous / inactive client id | exact (case-sensitive) client id of exactly one configured LTI 1.3 type with a receiver connection; otherwise `unknown_client` / `ambiguous_client` / `tool_not_configured`; resource link of another tool → `wrong_tool` | `trust_test::test_foreign_ambiguous_and_inactive_client_ids_are_refused`, `test_connections_and_contexts_are_separate` |
+| Key rotation | rotated tool key unknown to the platform → `invalid_signature`, retry, nothing applied (repair: platform updates the key, "Retry now"); rotated platform key → one key set refetch; unfetchable key set → answer not trusted, no ack | `trust_test::test_tool_key_rotation_fails_closed_and_is_repairable`, `test_platform_key_rotation` |
+| Concurrent delivery | per-row delivery lock, per-target receiver lock, unique jti index, optimistic version writes; verified with real parallel processes (18 concurrent requests in php-fpm workers, six CLI delivery processes) | `robustness.spec.js` (E2E), `test_parallel_delivery_is_locked`, `test_receiver_target_is_locked` |
 | Learner self-marking | CAP_PROHIBIT of `moodle/course:togglecompletion` for the authenticated-user role in the module context (server-side core check, not CSS) | gate tests step 2, E2E click test; mutation killed |
 
 No new key material and no shared secrets: the plugin reuses the keys core already maintains (enrol_lti tool key,
@@ -51,12 +54,16 @@ mod_lti platform key) and the trust the administrators already configured.
 
 The journal and the Moodle events contain event names, ids, versions, correlation ids and short codes. They never
 contain a JWT, an access token, a key, a client assertion or a message payload. Error codes stored in the outbox are
-bounded to 64 characters and come from a fixed vocabulary (plus `PARAM_ALPHANUMEXT`-cleaned remote codes).
+bounded to 64 characters and come from a fixed vocabulary (plus `PARAM_ALPHANUMEXT`-cleaned remote codes). Audit
+redaction (`journal::redact()`) additionally strips JWT/JWS, bearer tokens, PEM blocks and long opaque tokens from every
+journal detail before it is stored or triggered as an event (`report_test::test_redaction`); a full flow is scanned for
+posted JWS parts, keys and bearer tokens in the journal, the outbox and the standard log
+(`report_test::test_outcome_report_trace_and_no_secrets_in_logs`).
 
 ## Capabilities and risks
 
 | Capability | Context | Risk | Default |
 |---|---|---|---|
 | `local/lticompletionsync:manageconnections` | system | RISK_CONFIG | manager |
-| `local/lticompletionsync:manageactivity` | module | RISK_CONFIG (writes a role override in the module) | editingteacher, manager |
+| `local/lticompletionsync:manageactivity` | module | RISK_CONFIG (writes a role override in the module; the prior override is restored on release) | editingteacher, manager |
 | `local/lticompletionsync:viewstatus` | course | RISK_PERSONAL (names and states) | teacher, editingteacher, manager |

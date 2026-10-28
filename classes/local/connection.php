@@ -74,26 +74,63 @@ class connection {
         return $DB->get_records(self::TABLE, null, 'role DESC, id ASC');
     }
 
+    /** @var string Receiver lookup: no LTI tool with this client id, or none registered as receiver here. */
+    public const LOOKUP_UNKNOWN = 'unknown_client';
+    /** @var string Receiver lookup: more than one LTI tool carries this client id (never guessed). */
+    public const LOOKUP_AMBIGUOUS = 'ambiguous_client';
+    /** @var string Receiver lookup: the tool exists but is not an active (configured) LTI 1.3 tool. */
+    public const LOOKUP_INACTIVE = 'tool_not_configured';
+
+    /**
+     * Find the receiver connection (enabled or not) for the client id a request claims.
+     *
+     * Fails closed: a client id that no LTI tool of this site carries (foreign), that more than one tool carries
+     * (ambiguous: an administrator copied a type, or a course tool reuses a client id), or whose tool is not an active
+     * LTI 1.3 tool, never resolves to a connection.
+     *
+     * @param string $clientid
+     * @return array [connection row or null, error code ('' when found)]
+     */
+    public static function receiver_lookup(string $clientid): array {
+        global $DB;
+        if ($clientid === '' || strlen($clientid) > 1333) {
+            return [null, self::LOOKUP_UNKNOWN];
+        }
+        $types = $DB->get_records_select(
+            'lti_types',
+            $DB->sql_equal('clientid', ':clientid', true, true),
+            ['clientid' => $clientid],
+            'id',
+            'id, ltiversion, state',
+            0,
+            2
+        );
+        if (count($types) > 1) {
+            return [null, self::LOOKUP_AMBIGUOUS];
+        }
+        $type = reset($types);
+        if (!$type) {
+            return [null, self::LOOKUP_UNKNOWN];
+        }
+        // LTI_TOOL_STATE_CONFIGURED = 1 (mod/lti/locallib.php).
+        if ($type->ltiversion !== '1.3.0' || (int) $type->state !== 1) {
+            return [null, self::LOOKUP_INACTIVE];
+        }
+        $con = $DB->get_record(self::TABLE, ['role' => self::ROLE_RECEIVER, 'ltitypeid' => $type->id]);
+        if (!$con) {
+            return [null, self::LOOKUP_UNKNOWN];
+        }
+        return [$con, ''];
+    }
+
     /**
      * The receiver connection (enabled or not) of an LTI 1.3 tool type identified by its client id.
      *
      * @param string $clientid
-     * @return \stdClass|null connection with the extra field typeid
+     * @return \stdClass|null
      */
     public static function receiver_for_clientid(string $clientid): ?\stdClass {
-        global $DB;
-        if ($clientid === '' || strlen($clientid) > 1333) {
-            return null;
-        }
-        $sql = "SELECT c.*
-                  FROM {" . self::TABLE . "} c
-                  JOIN {lti_types} t ON t.id = c.ltitypeid
-                 WHERE c.role = :role AND t.clientid = :clientid AND t.ltiversion = :ver";
-        $rows = $DB->get_records_sql($sql, ['role' => self::ROLE_RECEIVER, 'clientid' => $clientid, 'ver' => '1.3.0']);
-        if (count($rows) !== 1) {
-            return null;
-        }
-        return reset($rows);
+        return self::receiver_lookup($clientid)[0];
     }
 
     /**
@@ -200,11 +237,14 @@ class connection {
                 $row->timechecked = 0;
             }
             $DB->update_record(self::TABLE, $row);
+            sender\source::reset_caches();
             return $row->id;
         }
         $row->timecreated = $now;
         $row->partnerstatus = self::PARTNER_UNKNOWN;
-        return (int) $DB->insert_record(self::TABLE, $row);
+        $id = (int) $DB->insert_record(self::TABLE, $row);
+        sender\source::reset_caches();
+        return $id;
     }
 
     /**
@@ -220,6 +260,21 @@ class connection {
         $DB->delete_records('local_lticompletionsync_jti', ['connectionid' => $id]);
         $DB->delete_records(self::TABLE, ['id' => $id]);
         $transaction->allow_commit();
+        sender\source::reset_caches();
+    }
+
+    /**
+     * Enable or disable a connection (administrative confirmation).
+     *
+     * @param int $id
+     * @param bool $enabled
+     */
+    public static function set_enabled(int $id, bool $enabled): void {
+        global $DB, $USER;
+        $DB->update_record(self::TABLE, (object) [
+            'id' => $id, 'enabled' => $enabled ? 1 : 0, 'usermodified' => (int) $USER->id, 'timemodified' => time(),
+        ]);
+        sender\source::reset_caches();
     }
 
     /**

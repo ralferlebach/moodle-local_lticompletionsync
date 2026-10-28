@@ -66,7 +66,8 @@ class protocol {
     public const PERMANENT_REASONS = [
         'unknown_resource_link', 'wrong_tool', 'activity_not_managed', 'unsupported_not_lti',
         'unsupported_completion_disabled', 'unsupported_tracking_none', 'unsupported_tracking_automatic',
-        'unsupported_user_not_tracked', 'identity_unresolved', 'bad_message', 'stale_version', 'wrong_deployment',
+        'unsupported_user_not_tracked', 'identity_unresolved', 'pseudonym_api_unsupported', 'bad_message', 'stale_version',
+        'wrong_deployment',
     ];
 
     /**

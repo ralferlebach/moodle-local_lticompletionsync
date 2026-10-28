@@ -78,9 +78,9 @@ class endpoint {
             return self::error(400, 'bad_request');
         }
         $clientid = $peek[1]['iss'];
-        $con = \local_lticompletionsync\local\connection::receiver_for_clientid($clientid);
+        [$con, $lookuperror] = \local_lticompletionsync\local\connection::receiver_lookup($clientid);
         if (!$con) {
-            return self::error(401, 'unknown_client');
+            return self::error(401, $lookuperror);
         }
         if (!$con->enabled) {
             return self::error(403, 'connection_not_enabled');

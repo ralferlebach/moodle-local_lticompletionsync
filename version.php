@@ -25,11 +25,11 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_lticompletionsync';
-$plugin->version   = 2026102601;
+$plugin->version   = 2026102701;
 $plugin->requires  = 2024100700; // Moodle 4.5.
 $plugin->supported = [405, 503];
 $plugin->maturity  = MATURITY_ALPHA;
-$plugin->release   = '0.1.0';
+$plugin->release   = '0.2.0';
 
 // Declare the MINIMUM version of each dependency that provides the API in use - never the current
 // build number. An exact pin breaks installation as soon as a sibling lags by a single release,

@@ -20,13 +20,147 @@
  * extension (fixtures/csync_seed.php), which is run on a site through the stack's moodle_cli wrapper.
  */
 
+const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const e2e = require(process.env.E2E_LIB || '/home/claude/e2e/lib/e2e');
 const E2E_HOME = process.env.E2E_HOME || '/home/claude/e2e';
 const SEED_SCRIPT = path.join(__dirname, 'fixtures', 'csync_seed.php');
 const ROOTS = { a: process.env.A_ROOT || '/home/claude/moodle', b: process.env.B_ROOT || '/home/claude/moodle53' };
+// Same-version partner sites of the stack (e2e-pair-setup): same trees, own database and dataroot.
+ROOTS.a2 = ROOTS.a;
+ROOTS.b2 = ROOTS.b;
+const PAIRS = {
+  a2: { url: process.env.A2_URL || 'https://a2.platform-a.test', password: 'E2e-Admin!2026-A2' },
+  b2: { url: process.env.B2_URL || 'https://b2.tool-b.test', password: 'E2e-Admin!2026-B2' },
+};
+const NGINX_CONF = path.join(E2E_HOME, 'conf', 'nginx.conf');
+const BLOCK_MARK = '# csync-e2e-block';
+
+/**
+ * The stack seed extended by the partner sites a2/b2 (urls, admin credentials).
+ *
+ * @returns {object}
+ */
+function loadSeed() {
+  const seed = e2e.loadSeed();
+  for (const [site, p] of Object.entries(PAIRS)) {
+    seed.urls[site] = seed.urls[site] || p.url;
+    seed.admins[site] = seed.admins[site] || { site, username: 'admin', password: p.password, role: 'admin' };
+  }
+  return seed;
+}
+
+/**
+ * Whether a partner site (a2/b2) of the stack is installed.
+ *
+ * @param {string} site
+ * @returns {boolean}
+ */
+function siteInstalled(site) {
+  if (site === 'a' || site === 'b') {
+    return true;
+  }
+  try {
+    execFileSync('bash', ['-c', `. ${E2E_HOME}/bin/e2e-env.sh; site_installed ${site}`], { stdio: 'ignore' });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Path of this plugin's CLI script relative to a site's tree root.
+ *
+ * @param {string} site
+ * @returns {string}
+ */
+function cliPath(site) {
+  return (site.startsWith('b') ? 'public/' : '') + 'local/lticompletionsync/cli/sync.php';
+}
+
+/**
+ * Run N processes of this plugin's CLI on a site AT THE SAME TIME (each its own PHP process and DB connection).
+ *
+ * @param {string} site
+ * @param {number} n
+ * @param {string[]} args CLI options
+ * @returns {Promise<object[]>} exit code and output of every process
+ */
+function parallelCli(site, n, args) {
+  const cmd = `. ${E2E_HOME}/bin/e2e-env.sh; moodle_cli ${site} "$@"`;
+  const runs = [];
+  for (let i = 0; i < n; i++) {
+    runs.push(new Promise((resolve) => {
+      const child = spawn('bash', ['-c', cmd, 'csync', cliPath(site), ...args]);
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { out += d; });
+      child.on('close', (code) => resolve({ code, out }));
+    }));
+  }
+  return Promise.all(runs);
+}
+
+/**
+ * Block (or unblock) this plugin's endpoint of a site at the web server: 'drop' closes the connection without an answer
+ * (interrupted network), 'absent' answers 404 like a Moodle without the plugin. Restored with endpointBlock(site, null).
+ * Only use inside the stack lock (flock /tmp/e2e_stack.lock), see README.md.
+ *
+ * @param {string} site
+ * @param {string|null} mode 'drop' | 'absent' | null
+ */
+function endpointBlock(site, mode) {
+  const host = new URL(loadSeed().urls[site]).host;
+  let conf = fs.readFileSync(NGINX_CONF, 'utf8').split('\n').filter((l) => !l.includes(BLOCK_MARK)).join('\n');
+  if (mode) {
+    const rule = `    location = /local/lticompletionsync/endpoint.php { return ${mode === 'drop' ? 444 : 404}; } ${BLOCK_MARK}`;
+    conf = conf.replace(`server_name ${host};`, `server_name ${host};\n${rule}`);
+  }
+  fs.writeFileSync(NGINX_CONF, conf);
+  execFileSync('nginx', ['-c', NGINX_CONF, '-s', 'reload']);
+  execFileSync('bash', ['-c', 'sleep 1']);
+}
+
+/**
+ * Remove every endpoint block (safety net for afterAll / process exit).
+ */
+function endpointUnblockAll() {
+  const conf = fs.readFileSync(NGINX_CONF, 'utf8');
+  if (conf.includes(BLOCK_MARK)) {
+    fs.writeFileSync(NGINX_CONF, conf.split('\n').filter((l) => !l.includes(BLOCK_MARK)).join('\n'));
+    execFileSync('nginx', ['-c', NGINX_CONF, '-s', 'reload']);
+  }
+}
+process.on('exit', () => {
+  try {
+    endpointUnblockAll();
+  } catch (e) {
+    // Best effort.
+  }
+});
+
+/**
+ * Accessibility check with axe-core (WCAG 2.0/2.1/2.2 A and AA rules) of the given selectors on the current page.
+ * axe-core is loaded from AXE_CORE (path of axe.min.js); without it the check fails instead of being skipped.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string[]} include CSS selectors to check
+ * @returns {Promise<object[]>} violations
+ */
+async function axeViolations(page, include) {
+  const file = process.env.AXE_CORE || '/tmp/csync-axe/node_modules/axe-core/axe.min.js';
+  await page.addScriptTag({ path: file });
+  return page.evaluate(async (inc) => {
+    const ctx = { include: inc.filter((s) => document.querySelector(s)).map((s) => [s]) };
+    if (!ctx.include.length) {
+      return [{ id: 'nothing-to-check', nodes: [] }];
+    }
+    const r = await window.axe.run(ctx, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+    return r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.map((n) => n.html.slice(0, 200)) }));
+  }, include);
+}
 
 /**
  * Run a stage of the seed extension on a site.
@@ -95,4 +229,5 @@ function runDispatchTasks(site) {
   return execFileSync('bash', ['-c', cmd], { encoding: 'utf8', timeout: 240000 });
 }
 
-module.exports = { e2e, csync, buildScenario, launchAsLearner, runDispatchTasks };
+module.exports = { e2e, csync, buildScenario, launchAsLearner, runDispatchTasks, loadSeed, siteInstalled, parallelCli,
+  endpointBlock, endpointUnblockAll, axeViolations };

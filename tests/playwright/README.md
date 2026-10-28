@@ -16,6 +16,9 @@ It enables `allowprivatetargets` on the tool site (the stack resolves its hosts 
 | `la` | A 4.5 | A 4.5 | same-site loopback (CS-G1) |
 | `lb` | B 5.3 | B 5.3 | same-site loopback (CS-G1) |
 | `pa` | A 4.5 (own type, pseudonymised) | B 5.3 | second registration; `pseudonym_diagnostics.spec.js` |
+| `a2a` | A 4.5 | A2 4.5 (partner site) | two real 4.5 sites (skipped with a reason if A2 is not installed) |
+| `b2b` | B 5.3 | B2 5.3 (partner site) | two real 5.3 sites (skipped with a reason if B2 is not installed) |
+| `rs` | A 4.5 | B 5.3 | `robustness.spec.js`, two learners |
 
 Per scenario (serial): (1) the learner launches the external tool activity, reads the published page on the tool
 (completion on view), the tool delivers, the platform shows **native** completion of the same mod_lti activity
@@ -44,4 +47,16 @@ connection on A.
 `npm run check` runs `node --check` on all files. Delivery is triggered with the extension's `deliver` stage (instead of
 waiting for cron); the `cron` stage runs completion and plugin tasks and only this plugin's ad hoc tasks.
 
-Status: executed 2026-10-26 by the plugin agent, Chromium: **19/19 passed** (16 + 3). Not part of CI.
+Per direction, test 1 also checks the learner UI (CS-02): the activity page shows the explanatory state instead of the
+manual control (the iframe launch is blocked in the test, a launch would complete the tool page again), the course page
+control is `aria-disabled` with a describing note and inert (Enter and click), and axe-core (WCAG 2.0/2.1/2.2 A/AA,
+`AXE_CORE` or `/tmp/csync-axe/node_modules/axe-core/axe.min.js`) reports no violation.
+
+`robustness.spec.js` (scenario `rs`, needs the stack lock: it changes nginx rules and restores them): concurrent storm of
+18 signed requests (6 versions × first/duplicate/byte-identical replay) through parallel php-fpm workers; six parallel
+CLI delivery processes; interrupted network (`return 444` for the platform endpoint) and "Retry now"; AGS reference check
+with the platform endpoint answering 404 (stock Moodle AGS path); live outcome report of both sites (JSON evidence files
+in the test output directory).
+
+Run: `flock /tmp/e2e_stack.lock env NODE_PATH=/home/claude/e2e/node_modules /home/claude/e2e/node_modules/.bin/playwright test -c tests/playwright/playwright.config.js`.
+Results: see docs/ACCEPTANCE.md. Not part of CI.

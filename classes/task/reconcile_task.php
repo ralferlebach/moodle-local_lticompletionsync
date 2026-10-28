@@ -31,7 +31,10 @@ class reconcile_task extends \core\task\adhoc_task {
      */
     public function execute() {
         $data = $this->get_custom_data();
-        $count = reconciler::full((int) ($data->connectionid ?? 0));
-        mtrace('local_lticompletionsync: full reconcile queued ' . $count . ' new versions');
+        \local_lticompletionsync\local\sender\source::reset_caches();
+        $force = !empty($data->force);
+        $count = reconciler::full((int) ($data->connectionid ?? 0), $force);
+        mtrace('local_lticompletionsync: ' . ($force ? 'force resync' : 'full reconcile') . ' queued ' . $count .
+            ' new versions');
     }
 }

@@ -87,10 +87,17 @@ class activity_manager {
      * @param bool $enabled
      * @param bool $deferlockdown write the lockdown later by an ad hoc task (used during restore and duplication,
      *                            where core copies the permission overrides itself after the restore)
+     * @param array|null $adopt restore/duplicate only: lockdown of the source activity (lockedroleid, priorrecorded,
+     *                          priorpermission), adopted by the deferred task when core copied its prohibition
      * @return \stdClass the row
      * @throws \moodle_exception when the activity cannot be managed
      */
-    public static function set_managed(\cm_info $cm, bool $enabled, bool $deferlockdown = false): \stdClass {
+    public static function set_managed(
+        \cm_info $cm,
+        bool $enabled,
+        bool $deferlockdown = false,
+        ?array $adopt = null
+    ): \stdClass {
         global $DB, $USER;
         $con = self::connection_for($cm);
         if ($enabled) {
@@ -105,25 +112,58 @@ class activity_manager {
         $now = time();
         $row = self::get($cm->id);
         if (!$row) {
-            $row = (object) ['cmid' => $cm->id, 'enabled' => 0, 'lockedroleid' => 0, 'timecreated' => $now];
+            $row = (object) ['cmid' => $cm->id, 'enabled' => 0, 'lockedroleid' => 0, 'priorrecorded' => 0,
+                'priorpermission' => null, 'timecreated' => $now];
             $insert = (array) $row + ['usermodified' => $USER->id, 'timemodified' => $now];
             $row->id = $DB->insert_record(self::TABLE, (object) $insert);
         }
         $row->enabled = $enabled ? 1 : 0;
         if ($enabled && $con && $con->lockdown && (int) $row->lockedroleid === 0 && $deferlockdown) {
             $task = new \local_lticompletionsync\task\lockdown_task();
-            $task->set_custom_data(['cmid' => (int) $cm->id]);
+            $task->set_custom_data(['cmid' => (int) $cm->id, 'adopt' => $adopt]);
             \core\task\manager::queue_adhoc_task($task, true);
         } else if ($enabled && $con && $con->lockdown && (int) $row->lockedroleid === 0) {
-            $row->lockedroleid = completion_adapter::lockdown($cm);
+            self::write_lockdown($cm, $row);
         } else if (!$enabled && (int) $row->lockedroleid > 0) {
-            completion_adapter::release_lockdown($cm, (int) $row->lockedroleid);
-            $row->lockedroleid = 0;
+            self::release($cm->context, $row);
         }
         $row->usermodified = $USER->id;
         $row->timemodified = $now;
         $DB->update_record(self::TABLE, $row);
         return $row;
+    }
+
+    /**
+     * Write the lockdown and remember the override it replaces (in the row object, not saved).
+     *
+     * @param \cm_info $cm
+     * @param \stdClass $row
+     */
+    private static function write_lockdown(\cm_info $cm, \stdClass $row): void {
+        [$roleid, $prior] = completion_adapter::lockdown($cm);
+        $row->lockedroleid = $roleid;
+        $row->priorrecorded = $roleid > 0 ? 1 : 0;
+        $row->priorpermission = $prior;
+    }
+
+    /**
+     * Release the lockdown of a row (restores the prior override, see completion_adapter::release_lockdown()).
+     *
+     * @param \context $context module context
+     * @param \stdClass $row (changed, not saved)
+     * @return string RELEASE_* outcome
+     */
+    private static function release(\context $context, \stdClass $row): string {
+        $outcome = completion_adapter::release_lockdown(
+            $context,
+            (int) $row->lockedroleid,
+            !empty($row->priorrecorded),
+            $row->priorpermission === null ? null : (int) $row->priorpermission
+        );
+        $row->lockedroleid = 0;
+        $row->priorrecorded = 0;
+        $row->priorpermission = null;
+        return $outcome;
     }
 
     /**
@@ -152,18 +192,37 @@ class activity_manager {
      * A lockdown that this plugin wrote and somebody removed later is not written again (an administrator decision);
      * it shows up in the lockdown state instead.
      *
+     * Restore and duplication ($adopt): core copies the permission overrides of the source activity into the new one
+     * after the restore. When the source was locked down and its prohibition arrived in the copy, the copy is adopted
+     * with the source's remembered prior override (so that a later release restores what the source had before),
+     * instead of being mistaken for an administrator's prohibition.
+     *
      * @param \cm_info $cm
      * @param \stdClass|null $con
+     * @param array|null $adopt lockedroleid, priorrecorded, priorpermission of the source activity
      */
-    public static function ensure_lockdown(\cm_info $cm, ?\stdClass $con = null): void {
+    public static function ensure_lockdown(\cm_info $cm, ?\stdClass $con = null, ?array $adopt = null): void {
         global $DB;
         $con = $con ?? self::connection_for($cm);
         $row = self::get($cm->id);
         if (!$con || !$con->lockdown || !$row || !$row->enabled || (int) $row->lockedroleid > 0) {
             return;
         }
+        $roleid = completion_adapter::lockdown_roleid();
+        if (
+            $adopt && (int) ($adopt['lockedroleid'] ?? 0) === $roleid && $roleid > 0
+            && completion_adapter::current_override($cm->context, $roleid) === CAP_PROHIBIT
+        ) {
+            $row->lockedroleid = $roleid;
+            $row->priorrecorded = (int) !empty($adopt['priorrecorded']);
+            $prior = $adopt['priorpermission'] ?? null;
+            $row->priorpermission = $prior === null || $prior === '' ? null : (int) $prior;
+        } else {
+            self::write_lockdown($cm, $row);
+        }
         $DB->update_record(self::TABLE, (object) [
-            'id' => $row->id, 'lockedroleid' => completion_adapter::lockdown($cm), 'timemodified' => time(),
+            'id' => $row->id, 'lockedroleid' => $row->lockedroleid, 'priorrecorded' => $row->priorrecorded,
+            'priorpermission' => $row->priorpermission, 'timemodified' => time(),
         ]);
     }
 
@@ -171,48 +230,56 @@ class activity_manager {
      * Lockdown state of an activity for display and diagnostics.
      *
      * @param \cm_info $cm
-     * @return array applied (bool), users (int: tracked users who can still self-toggle)
+     * @return array applied (bool), users (int: tracked users who can still self-toggle), sample (int[]),
+     *               override (int|null: current explicit override of the locked role), prior (int|null)
      */
     public static function lockdown_state(\cm_info $cm): array {
         $row = self::get($cm->id);
+        $open = completion_adapter::users_who_can_toggle($cm);
+        $roleid = $row && (int) $row->lockedroleid > 0 ? (int) $row->lockedroleid : completion_adapter::lockdown_roleid();
         return [
             'applied' => $row && (int) $row->lockedroleid > 0,
-            'users' => count(completion_adapter::users_who_can_toggle($cm)),
+            'users' => $open['count'],
+            'sample' => $open['sample'],
+            'override' => $roleid > 0 ? completion_adapter::current_override($cm->context, $roleid) : null,
+            'prior' => $row && !empty($row->priorrecorded) && $row->priorpermission !== null ? (int) $row->priorpermission : null,
         ];
     }
 
     /**
-     * Remove the learner lockdown of every activity this plugin manages or managed (uninstall).
+     * Release the learner lockdown of every activity this plugin manages or managed (uninstall).
      *
-     * Covers lockdowns written by this plugin (lockedroleid) and prohibitions that core copied when a managed activity
-     * was duplicated before the deferred lockdown task ran (lockedroleid still 0). Only a CAP_PROHIBIT of the
-     * authenticated-user role in the activity's own context is removed; other overrides stay untouched.
+     * Rows with a lockdown restore the override that existed before it (see completion_adapter::release_lockdown()).
+     * An enabled row without a lockdown yet (restore or duplication whose deferred lockdown task has not run) can hold
+     * a prohibition that core copied from the source activity; that copy is removed (its prior state is unknown).
+     * Overrides of other roles are never touched.
      *
-     * @return int number of removed overrides
+     * @return array counts per outcome (restored, removed, kept_changed, none)
      */
-    public static function release_all_lockdowns(): int {
+    public static function release_all_lockdowns(): array {
         global $DB;
-        $count = 0;
-        $roleids = array_filter([completion_adapter::lockdown_roleid()]);
-        foreach ($DB->get_records(self::TABLE) as $row) {
-            if ((int) $row->lockedroleid > 0) {
-                $roleids[] = (int) $row->lockedroleid;
-            }
+        $counts = [completion_adapter::RELEASE_RESTORED => 0, completion_adapter::RELEASE_REMOVED => 0,
+            completion_adapter::RELEASE_KEPT => 0, completion_adapter::RELEASE_NONE => 0];
+        $default = completion_adapter::lockdown_roleid();
+        $rs = $DB->get_recordset(self::TABLE, null, 'id');
+        foreach ($rs as $row) {
             $context = \context_module::instance((int) $row->cmid, IGNORE_MISSING);
             if (!$context) {
                 continue;
             }
-            foreach (array_unique($roleids) as $roleid) {
-                $exists = $DB->record_exists('role_capabilities', ['contextid' => $context->id, 'roleid' => $roleid,
-                    'capability' => completion_adapter::TOGGLE_CAPABILITY, 'permission' => CAP_PROHIBIT]);
-                if ($exists) {
-                    unassign_capability(completion_adapter::TOGGLE_CAPABILITY, $roleid, $context->id);
-                    $context->mark_dirty();
-                    $count++;
-                }
+            if ((int) $row->lockedroleid > 0) {
+                $counts[self::release($context, $row)]++;
+                $DB->update_record(self::TABLE, (object) ['id' => $row->id, 'lockedroleid' => 0, 'priorrecorded' => 0,
+                    'priorpermission' => null]);
+                continue;
+            }
+            if ($row->enabled && $default > 0 && completion_adapter::current_override($context, $default) === CAP_PROHIBIT) {
+                // Deferred lockdown not yet written: the prohibition is the copy of the source's lockdown.
+                $counts[completion_adapter::release_lockdown($context, $default, false, null)]++;
             }
         }
-        return $count;
+        $rs->close();
+        return $counts;
     }
 
     /**

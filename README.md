@@ -8,9 +8,23 @@ completion of the same external tool (mod_lti) activity** – including revocati
 acknowledgement and reconciliation – and **never creates, changes or deletes a grade**. One plugin, installed on both
 Moodle sites; each LTI 1.3 connection decides whether this site is sender (tool), receiver (platform) or both.
 
-Status: alpha (0.1.0). See `docs/ACCEPTANCE.md` for what is proven and what is not, and `docs/DOCUMENTATION.md` for the
-no-fork gate CS-G4: native completion works for activities with **manual** completion tracking (learners are locked out
-server side); automatic completion tracking cannot be driven without a core change and is refused explicitly.
+Status: alpha (0.2.0, version 2026102701). Advertised mode: **manual tracking, server-controlled** – native completion
+works for external tool activities with **manual** completion tracking; the external tool sets and revokes it, learners
+are locked out server side (capability prohibition) and see "Completion: set by the external tool" instead of a dead-end
+"Mark as done" button. An **automatic completion condition** for mod_lti is an **open core gate** (no extension point in
+Moodle 4.5–5.3) and is refused explicitly. See `docs/ACCEPTANCE.md` for what is proven per audit item and what is not,
+and `docs/DOCUMENTATION.md` for the gates and their evidence.
+
+
+Branch policy
+-------------
+
+* `development` is the work branch: all development, fixes, refactoring and test additions happen there, and every
+  acceptance statement refers to an exact `development` commit and its own CI run.
+* `main` is the release branch. It is updated only by a deliberate pull request from `development` after functional
+  acceptance by the owner and a green `development` CI; the full release CI then runs again on the exact `main` commit.
+* No direct commits to `main`. Releases are tagged from `main`. Plugin versions are independent of the other family
+  plugins (no lockstep).
 
 
 Requirements
@@ -37,7 +51,17 @@ Install the plugin like any other plugin to folder
 
     local/lticompletionsync
 
-on **both** sites. See http://docs.moodle.org/en/Installing_plugins for details on installing Moodle plugins.
+on **both** sites (one ZIP for both roles). See http://docs.moodle.org/en/Installing_plugins for details on installing
+Moodle plugins. The plugin has no dependency on another plugin.
+
+**Upgrade from 0.1.0** (version 2026102601): replace the directory and run the upgrade (`admin/cli/upgrade.php`). The
+step adds three columns and one index; all data is kept. Lockdowns written by 0.1.0 did not remember an override that
+existed before them (0.1.0 overwrote it); for those activities the release keeps the 0.1.0 behaviour (the prohibition
+is removed), new lockdowns restore the prior override exactly.
+
+**Rollback to 0.1.0**: Moodle does not downgrade plugins. Restore the database backup taken before the upgrade together
+with the 0.1.0 code (verified on scratch sites, see `docs/ACCEPTANCE.md`, CS-01). Uninstalling instead writes back the
+learner overrides that existed before the lockdowns and removes all plugin data.
 
 
 Usage & Settings
@@ -53,8 +77,13 @@ Usage & Settings
 4. Teachers: *External tool activity > More > Completion sync* (opt in, lockdown state, received states);
    *Course > More > Completion sync status* (outgoing and incoming states, journal).
 
-Settings: allow private targets (test labs only), delivery attempts, retry delays, message life time, clock skew,
-journal retention.
+Settings: allow private targets (test labs only), delivery attempts, retry delays, rows and time per delivery run,
+message life time, clock skew, journal retention.
+
+Administrator repair actions per sender connection: check partner, full reconcile, **force resync** (new version of the
+current provider state for every target), **retry now** (after an outage), **requeue dead letters**, **refresh platform
+keys** (after a key rotation at the platform). The connection page shows a live outcome report (successful, revoked,
+failed and retried transfers with their causes); `cli/sync.php --report` prints it as JSON.
 
 
 Capabilities
@@ -82,8 +111,12 @@ How this plugin works / Pitfalls
 --------------------------------
 
 * Native completion is set with core's `completion_info::update_state()` on activities with manual completion tracking;
-  learners are prevented from toggling it by a capability prohibition in the activity (core still shows the button; the
-  click fails). No core change, no direct table writes, no grade operation.
+  learners are prevented from toggling it by a capability prohibition in the activity (an explicit override that existed
+  before is restored when the management ends). On the activity page the learner sees the explanatory state instead of
+  the button (supported core API `activity_header::set_hidecompletion()` through the hook `before_http_headers`); on the
+  course page core renders the button without any hook, so it is marked unavailable and described by a note. No core
+  change, no direct table writes, no grade operation.
+* Account merges with tool_mergeusers (when installed): the plugin's state tables follow the kept user.
 * The channel is a documented LTI extension (not an AGS endpoint) authenticated with the LTI 1.3 keys both sites already
   trust (enrol_lti tool key, mod_lti platform key); replay protection, audience/deployment checks and SSRF guard included.
 * Without the plugin on the platform, the sender declares "No partner plugin"; an optional tool-only level posts AGS

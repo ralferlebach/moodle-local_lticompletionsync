@@ -219,9 +219,9 @@ final class ags_progress_test extends \advanced_testcase {
         $this->assertSame('Completed', $score['body']['activityProgress']);
         $this->assertSame('NotReady', $score['body']['gradingProgress']);
         $this->assertSame((string) $this->plearner->id, $score['body']['userId']);
-        $this->assertSame('toolonly', \local_lticompletionsync\local\status_report::level(
-            connection::get((int) $this->sender->id)
-        )['key']);
+        $level = \local_lticompletionsync\local\status_report::level(connection::get((int) $this->sender->id));
+        $this->assertSame('toolonly', $level['key']);
+        $this->assertSame(['links' => 1, 'progress' => 1], $level['ags']);
         // Nothing changes natively on the platform: there is no end-to-end guarantee at this level.
         $this->assertSame(0, $this->platform_state());
     }
@@ -243,5 +243,9 @@ final class ags_progress_test extends \advanced_testcase {
         $this->assertSame(outbox::STATUS_BLOCKED, $this->dispatcher($connector)->deliver((int) $this->outrow($tooluser)->id));
         $this->assertSame('ags_not_permitted', $this->outrow($tooluser)->lasterror);
         $this->assertSame([], $connector->requests);
+        // The platform is judged by the capability set it granted: no promise of a tool-only level.
+        $level = \local_lticompletionsync\local\status_report::level(connection::get((int) $this->sender->id));
+        $this->assertSame('nopartnernoags', $level['key']);
+        $this->assertSame(['links' => 1, 'progress' => 0], $level['ags']);
     }
 }

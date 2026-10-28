@@ -77,6 +77,7 @@ trait sync_env {
             'pagecompletion' => COMPLETION_TRACKING_MANUAL,
         ];
         $gen = $this->getDataGenerator();
+        \local_lticompletionsync\local\sender\source::reset_caches();
         set_config('allowprivatetargets', 1, 'local_lticompletionsync');
         $authclass = \core_plugin_manager::resolve_plugininfo_class('auth');
         $authclass::enable_plugin('lti', true);
@@ -147,6 +148,7 @@ trait sync_env {
         ]);
         $this->sender = connection::get($senderid);
         $this->receiver = connection::get($receiverid);
+        \local_lticompletionsync\local\sender\source::reset_caches();
     }
 
     /**

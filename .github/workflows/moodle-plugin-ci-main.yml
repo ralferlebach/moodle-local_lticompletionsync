@@ -6,6 +6,10 @@
 # supported Moodle 4.5 to 5.3 x PHP x DB matrix. No grunt / mustache steps: the
 # plugin's templates are checked locally (docs/TESTING.md). The fast parallel
 # pipeline lives in moodle-plugin-ci-dev.yml.
+#
+# Nothing that did not run counts as green: PHPUnit fails on skipped/incomplete/
+# risky tests and when 0 tests ran; Behat fails on 0 scenarios and on skipped or
+# undefined steps. No family version lockstep: every plugin releases on its own.
 ##############################################################################
 
 name: Moodle Plugin CI Main
@@ -42,7 +46,11 @@ jobs:
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 3
+        # mariadb:11.4 (required by Moodle 5.3) no longer ships mysqladmin, so "mysqladmin ping" made
+        # "Initialize containers" fail in every cell that starts this service. healthcheck.sh is in 10.11 and 11.4.
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s --health-timeout 5s --health-retries 10
     strategy:
       fail-fast: false
       matrix:
@@ -113,11 +121,34 @@ jobs:
         run: set -o pipefail; moodle-plugin-ci savepoints 2>&1 | tee ci-logs/savepoints.log
       - name: PHPUnit tests
         if: ${{ always() }}
-        run: set -o pipefail; moodle-plugin-ci phpunit --fail-on-warning --testdox 2>&1 | tee ci-logs/phpunit.log
+        run: set -o pipefail; moodle-plugin-ci phpunit --fail-on-warning --fail-on-risky --fail-on-skipped --fail-on-incomplete --testdox 2>&1 | tee ci-logs/phpunit.log
+      - name: PHPUnit must have executed tests (0 tests is not green)
+        if: ${{ always() }}
+        run: |
+          log=ci-logs/phpunit.log
+          if [ ! -s "$log" ]; then echo "::error::No PHPUnit log - the PHPUnit step did not run"; exit 1; fi
+          clean=$(sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$log")
+          if grep -q 'free pass' <<<"$clean"; then echo "::error::moodle-plugin-ci found no PHPUnit tests - 0 tests is not green"; exit 1; fi
+          n=$(grep -oE '^(OK \([0-9]+ tests?|Tests: [0-9]+)' <<<"$clean" | grep -oE '[0-9]+' | tail -1)
+          echo "PHPUnit tests executed: ${n:-none}"
+          if [ -z "$n" ] || [ "$n" -eq 0 ]; then echo "::error::PHPUnit executed 0 tests"; exit 1; fi
       - name: Behat features
         id: behat
         if: ${{ always() }}
         run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@local_lticompletionsync&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
+      - name: Behat must have run scenarios that all passed (0 scenarios, skipped or undefined steps are not green)
+        if: ${{ always() }}
+        run: |
+          log=ci-logs/behat.log
+          if [ ! -s "$log" ]; then echo "::error::No Behat log - the Behat step did not run"; exit 1; fi
+          clean=$(sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' "$log")
+          if grep -q 'free pass' <<<"$clean"; then echo "::error::No Behat features found - 0 scenarios is not green"; exit 1; fi
+          scen=$(grep -E '^[0-9]+ scenarios? \(' <<<"$clean" | tail -1)
+          steps=$(grep -E '^[0-9]+ steps? \(' <<<"$clean" | tail -1)
+          echo "Behat summary: ${scen:-none} / ${steps:-none}"
+          if [ -z "$scen" ] || [ "${scen%% *}" -eq 0 ]; then echo "::error::Behat ran 0 scenarios"; exit 1; fi
+          grep -qE '^([0-9]+) scenarios? \(\1 passed\)$' <<<"$scen" || { echo "::error::Not every Behat scenario passed: $scen"; exit 1; }
+          grep -qE '^([0-9]+) steps? \(\1 passed\)$' <<<"$steps" || { echo "::error::Skipped, undefined or pending Behat steps: $steps"; exit 1; }
       - name: Collect error summary
         if: ${{ always() }}
         run: |

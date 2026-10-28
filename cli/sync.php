@@ -34,14 +34,15 @@ use local_lticompletionsync\local\sender\reconciler;
 use local_lticompletionsync\local\status_report;
 
 [$options, $unrecognised] = cli_get_params(
-    ['help' => false, 'probe' => false, 'sweep' => false, 'full' => false, 'deliver' => false, 'status' => false,
-        'connection' => 0],
+    ['help' => false, 'probe' => false, 'sweep' => false, 'full' => false, 'resync' => false, 'retrynow' => false,
+        'deliver' => false, 'status' => false, 'report' => false, 'connection' => 0],
     ['h' => 'help']
 );
 if ($unrecognised) {
     cli_error(get_string('cliunknowoption', 'admin', implode(PHP_EOL . '  ', $unrecognised)));
 }
-$anyaction = $options['probe'] || $options['sweep'] || $options['full'] || $options['deliver'] || $options['status'];
+$anyaction = $options['probe'] || $options['sweep'] || $options['full'] || $options['resync'] || $options['retrynow']
+    || $options['deliver'] || $options['status'] || $options['report'] !== false;
 if ($options['help'] || !$anyaction) {
     echo "LTI completion sync maintenance.
 
@@ -49,9 +50,12 @@ Options:
   --probe            Capability handshake with the partner of every enabled sender connection
   --sweep            Delta sweep (changes without events, revocations)
   --full             Full reconcile
-  --deliver          Deliver all due outbox rows now
+  --resync           Force resync: a new version of the current provider state for every target
+  --retrynow         Make the retry rows due now (after an outage)
+  --deliver          Deliver due outbox rows now (bounded by the batch limit and time budget settings)
   --status           Print connections with level and state counts
-  --connection=ID    Restrict --probe/--full to one connection
+  --report[=HOURS]   Live outcome report as JSON (success, failed, revoked, retried with causes; default 24 h)
+  --connection=ID    Restrict --probe/--full/--resync/--retrynow to one connection
   -h, --help         This help
 ";
     exit(0);
@@ -71,8 +75,23 @@ if ($options['sweep']) {
 if ($options['full']) {
     cli_writeln('full: ' . reconciler::full($only) . ' new versions');
 }
+if ($options['resync']) {
+    cli_writeln('resync: ' . reconciler::full($only, true) . ' new versions');
+}
+if ($options['retrynow']) {
+    foreach (connection::all() as $con) {
+        if ($con->role === connection::ROLE_SENDER && (!$only || (int) $con->id === $only)) {
+            cli_writeln('retrynow ' . $con->id . ': ' . \local_lticompletionsync\local\sender\outbox::retry_now((int) $con->id));
+        }
+    }
+}
 if ($options['deliver']) {
     cli_writeln('deliver: ' . (new dispatcher())->deliver_due() . ' rows');
+}
+if ($options['report'] !== false) {
+    $hours = is_numeric($options['report']) ? max(1, (int) $options['report']) : 24;
+    echo json_encode(['site' => $CFG->wwwroot, 'hours' => $hours, 'generated' => time(),
+        'connections' => status_report::outcomes($hours * HOURSECS)], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
 }
 if ($options['status']) {
     foreach (connection::all() as $con) {

@@ -37,6 +37,10 @@ class dispatcher {
     private $channel;
     /** @var ags_progress */
     private $ags;
+    /** @var array connection id => row, cached for one run (deliver_due) */
+    private $connections = [];
+    /** @var array connection id => true when its partner was checked in this run */
+    private $probed = [];
 
     /**
      * Constructor.
@@ -50,18 +54,51 @@ class dispatcher {
     }
 
     /**
-     * Deliver all due rows.
+     * Deliver due rows, bounded by a number of rows and a time budget (the rest is picked up by the next sweep or
+     * drain task; nothing re-queues itself endlessly).
      *
-     * @param int $limit
+     * @param int $limit maximum number of rows (0 = setting "batchlimit")
+     * @param int $budget maximum seconds (0 = setting "timebudget")
      * @return int number of rows processed
      */
-    public function deliver_due(int $limit = 200): int {
+    public function deliver_due(int $limit = 0, int $budget = 0): int {
+        $limit = $limit > 0 ? $limit : \local_lticompletionsync\local\config::batch_limit();
+        $budget = $budget > 0 ? $budget : \local_lticompletionsync\local\config::time_budget();
+        $deadline = time() + $budget;
+        $this->connections = [];
+        $this->probed = [];
+        $seen = [];
         $count = 0;
-        foreach (outbox::due($limit) as $row) {
-            $this->deliver((int) $row->id);
-            $count++;
+        while ($count < $limit && time() < $deadline) {
+            $rows = outbox::due(min(source::BATCH, $limit - $count + count($seen)));
+            $rows = array_filter($rows, fn($row) => !isset($seen[(int) $row->id]));
+            if (!$rows) {
+                break;
+            }
+            foreach ($rows as $row) {
+                $seen[(int) $row->id] = true;
+                $this->deliver((int) $row->id);
+                $count++;
+                if ($count >= $limit || time() >= $deadline) {
+                    break;
+                }
+            }
         }
+        $this->connections = [];
         return $count;
+    }
+
+    /**
+     * Connection of a row (cached during deliver_due()).
+     *
+     * @param int $id
+     * @return \stdClass|null
+     */
+    private function connection(int $id): ?\stdClass {
+        if (!array_key_exists($id, $this->connections)) {
+            $this->connections[$id] = connection::get($id);
+        }
+        return $this->connections[$id];
     }
 
     /**
@@ -96,14 +133,21 @@ class dispatcher {
      */
     private function deliver_row(\stdClass $row): string {
         global $DB;
-        $con = connection::get((int) $row->connectionid);
+        $con = $this->connection((int) $row->connectionid);
         if (!$con || !$con->enabled || $con->role !== connection::ROLE_SENDER) {
             return $this->finish($row, outbox::STATUS_BLOCKED, 'connection_disabled', 'dead_letter');
         }
         $recheck = [connection::PARTNER_UNKNOWN, connection::PARTNER_ERROR, connection::PARTNER_DISABLED];
         // A platform without the plugin is checked again once a day (it may have installed it meanwhile).
         $stale = $con->partnerstatus === connection::PARTNER_NOPLUGIN && (int) $con->timechecked < time() - DAYSECS;
+        $cid = (int) $con->id;
         if ($stale || in_array($con->partnerstatus, $recheck, true)) {
+            if (isset($this->probed[$cid])) {
+                // One capability check per connection and run: during an outage the remaining rows wait for their
+                // retry instead of multiplying failing requests (bounded load, CS-04).
+                return outbox::schedule_retry($row, 'partner_' . $con->partnerstatus);
+            }
+            $this->probed[$cid] = true;
             $this->channel->probe($con);
         }
         if ($con->partnerstatus === connection::PARTNER_NOPLUGIN) {
@@ -188,6 +232,10 @@ class dispatcher {
         }
         if ($status === protocol::ACK_REJECTED && $reason === 'stale_version' && $applied >= (int) $row->version) {
             return $this->finish($row, outbox::STATUS_ACKED, null, 'acknowledged');
+        }
+        if ($status === protocol::ACK_REJECTED && $reason === 'superseded') {
+            // The platform holds a newer state of the same local user from another subject (account merge there).
+            return $this->finish($row, outbox::STATUS_ACKED, 'superseded', 'acknowledged');
         }
         if ($status === protocol::ACK_CONFLICT) {
             journal::record(

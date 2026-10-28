@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="local/lticompletionsync/db" VERSION="20261026" COMMENT="XMLDB file for Moodle local/lticompletionsync"
+<XMLDB PATH="local/lticompletionsync/db" VERSION="20261027" COMMENT="XMLDB file for Moodle local/lticompletionsync"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
 >
@@ -39,6 +39,8 @@
         <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
         <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="lockedroleid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Role whose togglecompletion capability this plugin prohibited in the module context (0 = none)"/>
+        <FIELD NAME="priorrecorded" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 when priorpermission holds the explicit override that existed before the lockdown (0 = rows of 0.1.0, unknown)"/>
+        <FIELD NAME="priorpermission" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Explicit permission of the locked role in the module context before the lockdown (NULL = there was none); restored on release"/>
         <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -82,6 +84,7 @@
         <INDEX NAME="target" UNIQUE="true" FIELDS="connectionid, resourcelinkid, userid"/>
         <INDEX NAME="due" UNIQUE="false" FIELDS="status, nextattempt"/>
         <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="source" UNIQUE="false" FIELDS="sourcekind, sourceid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="local_lticompletionsync_rcv" COMMENT="Receiver: state reported by the provider and local application state per connection, activity and user.">
@@ -97,6 +100,7 @@
         <FIELD NAME="status" TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT="received" SEQUENCE="false" COMMENT="received, validated, applied, rejected or conflict"/>
         <FIELD NAME="reason" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false"/>
         <FIELD NAME="correlationid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="subjecthash" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="sha256 of the LTI subject of the version sequence in remoteversion (a merge can join two sequences)"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>

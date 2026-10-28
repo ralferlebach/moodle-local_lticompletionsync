@@ -36,7 +36,12 @@ class lockdown_task extends \core\task\adhoc_task {
         if (!$courseid) {
             return;
         }
-        activity_manager::ensure_lockdown(get_fast_modinfo($courseid)->get_cm($cmid));
+        $adopt = $this->get_custom_data()->adopt ?? null;
+        activity_manager::ensure_lockdown(
+            get_fast_modinfo($courseid)->get_cm($cmid),
+            null,
+            $adopt ? (array) $adopt : null
+        );
         mtrace('local_lticompletionsync: lockdown checked for activity ' . $cmid);
     }
 }

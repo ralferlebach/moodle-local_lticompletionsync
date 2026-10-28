@@ -46,7 +46,7 @@ final class uninstall_test extends \advanced_testcase {
         $this->build_env(['automanage' => false]);
         $gen = $this->getDataGenerator();
         activity_manager::set_managed($this->pcm, true);
-        $this->assertSame([], completion_adapter::users_who_can_toggle($this->pcm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($this->pcm)['sample']);
 
         // A managed copy whose prohibition was copied by core (deferred lockdown task not run yet: lockedroleid 0).
         $copy = $gen->create_module('lti', ['course' => $this->pcourse->id, 'typeid' => $this->ptype->id,
@@ -59,7 +59,7 @@ final class uninstall_test extends \advanced_testcase {
             'capability' => completion_adapter::TOGGLE_CAPABILITY, 'permission' => CAP_PROHIBIT, 'timemodified' => time(),
             'modifierid' => 0]);
         accesslib_clear_all_caches_for_unit_testing();
-        $this->assertSame([], completion_adapter::users_who_can_toggle($copycm));
+        $this->assertSame([], completion_adapter::users_who_can_toggle($copycm)['sample']);
 
         // A teacher's own override in an unmanaged activity is not the plugin's business.
         $other = $gen->create_module('lti', ['course' => $this->pcourse->id, 'completion' => COMPLETION_TRACKING_MANUAL]);
@@ -82,8 +82,8 @@ final class uninstall_test extends \advanced_testcase {
             'a' => \context_module::instance($this->pcm->id)->id,
             'b' => $copyctx->id]
         ));
-        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($this->pcm));
-        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($copycm));
+        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($this->pcm)['sample']);
+        $this->assertSame([(int) $this->plearner->id], completion_adapter::users_who_can_toggle($copycm)['sample']);
         $this->assertTrue($DB->record_exists('role_capabilities', ['contextid' => \context_module::instance($other->cmid)->id,
             'roleid' => $studentrole, 'capability' => completion_adapter::TOGGLE_CAPABILITY]));
 

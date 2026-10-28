@@ -17,8 +17,9 @@
 /**
  * Backup of the per-activity setting "completion managed by the provider".
  *
- * Only the setting is backed up. Transfer states, versions and the journal are runtime data of a live connection and
- * are not copied into another course (the provider re-sends its state through the reconcile).
+ * Only the setting (with the lockdown bookkeeping) is backed up. Transfer states, versions and the journal are runtime
+ * data of a live connection and are not copied into another course (the provider re-sends its state through the
+ * reconcile).
  *
  * @package    local_lticompletionsync
  * @copyright  2026 Ralf Erlebach
@@ -33,7 +34,10 @@ class backup_local_lticompletionsync_plugin extends backup_local_plugin {
     protected function define_module_plugin_structure() {
         $plugin = $this->get_plugin_element();
         $wrapper = new backup_nested_element($this->get_recommended_name());
-        $activity = new backup_nested_element('activity', ['id'], ['enabled']);
+        // The lockdown fields let the restore adopt the prohibition that core copies with the permission overrides,
+        // so that a later release of the copy restores the override the source had before its lockdown.
+        $activity = new backup_nested_element('activity', ['id'], ['enabled', 'lockedroleid', 'priorrecorded',
+            'priorpermission']);
         $plugin->add_child($wrapper);
         $wrapper->add_child($activity);
         $activity->set_source_table('local_lticompletionsync_act', ['cmid' => backup::VAR_MODID]);

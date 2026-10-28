@@ -1,83 +1,84 @@
-# Acceptance – local_lticompletionsync 0.1.0 (version 2026102601)
+# Acceptance – local_lticompletionsync 0.2.0 (version 2026102701)
 
-Status classes (COMMON brief): **CP** code present / **TL** automated tests executed locally / **CI** CI passed (not
-executed) / **FA** functionally accepted (by the owner; nothing is FA yet) / **NV** not verified.
-"TL" names the evidence test; the runner table below says on which tree/database combinations it ran.
-Date of all runs: 2026-10-26, final code (version 2026102601 unchanged). PHP 8.3 on all runs; the PHP 8.2/8.3/8.4 matrix is run by the lead with `ltifullmatrix`.
+Evidence classes (round brief / audit FAM-05): **CP** code present · **TL** automated tests executed locally ·
+**CI** CI passed (not executed by us – the owner's GitHub `development` CI) · **FA** functionally accepted (owner; nothing
+is FA yet) · **NV** not verified · **GATE** core gate open. Local evidence below is from 2026-10-27 on the work copy
+(`/home/claude/work/moodle-local_lticompletionsync`), not from a GitHub SHA; the `development` CI of the pushed SHA is the
+owner's separate evidence. Skips are never counted as green (`--fail-on-skipped`).
 
-## Runner results
+## Runner results (local, PHP 8.3)
 
 `ltirun <tree> <db> local_lticompletionsync all` = phplint, validate, savepoints, mustache, codechecker (0 warnings),
-phpdoc (0 warnings), PHPUnit (`--fail-on-warning --fail-on-risky --fail-on-skipped`).
+phpdoc (0 warnings), PHPUnit suite.
 
-| Tree | DB | Static checks (6) | PHPUnit | Behat (non-JS) |
+| Tree | DB | Static (6) | PHPUnit | Behat non-JS |
 |---|---|---|---|---|
-| Moodle 4.5 | PostgreSQL 16 | all OK | OK, 94 tests, 409 assertions | 6 scenarios / 72 steps passed |
-| Moodle 4.5 | MariaDB 11.4 | all OK | OK, 94 tests, 409 assertions | 6 scenarios / 72 steps passed |
-| Moodle 5.0 | PostgreSQL 16 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.0 | MariaDB 11.4 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.1 | PostgreSQL 16 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.1 | MariaDB 11.4 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.2 | PostgreSQL 16 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.2 | MariaDB 11.4 | all OK | OK, 94 tests, 409 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.3 | PostgreSQL 17 | all OK | OK, 94 tests, 412 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
-| Moodle 5.3 | MariaDB 11.4 | all OK | OK, 94 tests, 412 assertions (15 accepted deprecations) | 6 scenarios / 72 steps passed |
+| Moodle 4.5.15+ | PostgreSQL 16 | all OK (2026-10-28, 2026102701) | OK, 130 tests, 713 assertions | 7 scenarios / 91 steps passed (2026102700; retention change has no UI) |
+| Moodle 4.5.15+ | MariaDB 11.4 | all OK (2026-10-28, 2026102701) | OK, 130 tests, 713 assertions | – |
+| Moodle 5.3+ | PostgreSQL 17 | all OK (2026-10-28, 2026102701) | OK, 130 tests, 716 assertions (26 accepted deprecations) | 7 scenarios / 91 steps passed (2026102700; retention change has no UI) |
+| Moodle 5.3+ | MariaDB 11.4 | all OK (2026-10-28, 2026102701) | OK, 130 tests, 716 assertions (26 accepted deprecations) | – |
 
-PHPUnit includes the 14 CS-G4 gate tests and the same-site loopback integration (both roles) on every row, so the
-gate evidence and a provider/consumer smoke exist for all five versions and both databases.
+5.0/5.1/5.2 and PHP 8.2/8.4: the lead's full matrix (`ltifullmatrix`), not run by this agent. PHPUnit deprecations on
+5.x are the accepted PHPUnit-9-style docblock annotations.
 
-* PHPUnit deprecations on 5.x are the accepted docblock-annotation deprecations of PHPUnit 11 (COMMON rule).
-* Upgrade: the real upgrade 2026102600 → 2026102601 ran on 4.5 and 5.3 (PostgreSQL and MariaDB); 5.0/5.1/5.2 were
-  fresh installs of 2026102601.
-* Playwright (two-site stack, Chromium, A = 4.5/PostgreSQL, B = 5.3/PostgreSQL, tool_ltidiagnostics 0.2.1 on both): **19/19 passed** (4 directions × 4 tests +
-  pseudonym/diagnostics scenario 3 tests); the ltisource_ltipseudonym policy table on A is empty again afterwards.
-* Uninstall on scratch databases (`tools/uninstall/run.sh`, 4.5 and 5.3 × PostgreSQL and MariaDB, seeded with both roles,
-  two lockdowns, outbox/received/replay/journal rows, ad hoc tasks, config, cache): after `uninstall_plugins.php --run`
-  **no plugin table, config, capability, role capability, scheduled or ad hoc task, file, user preference or observer
-  left; 0 `togglecompletion` overrides in the managed activities; the learner can mark both activities again.** Left by
-  core by design: the plugin's rows in `logstore_standard_log` (log history) and the `platformkeys` entry in the cache
-  configuration (rebuilt at the next upgrade).
-* Mutation checks (`tools/mutation_check.py`, 5.3/PostgreSQL): **7/7 killed**.
-* CI workflows: validated locally (family workflow checker: 97 checks, 0 errors); CI **not executed**.
-* Behat `@javascript`: no such scenario (the JS button is covered by Playwright).
+## Audit items (§3.7)
 
-## Gates (spec section 9)
+| ID | Status | Code (file:line) | Tests / evidence | Result / honest boundary |
+|---|---|---|---|---|
+| **CS-01** 5.3 CI, release identity | TL (local 4.5 + 5.3 × PG/MariaDB); CI: NV (5.3 container cause fixed by the CI agent, run by the owner) | `version.php:28` 2026102700 / 0.2.0; `db/upgrade.php:35-64` | runner table; `upgrade_test::test_upgrade_from_010` (0.1.0 schema re-created, real upgrade, idempotent); `plugin_contract_test::test_install_and_upgrade`; **real upgrades** 2026102601 → 2026102700 of the shared sites A (4.5/PG16) and B (5.3/PG17) and of A2/B2; `tools/upgrade/run.sh` on scratch DBs: 4.5 × PostgreSQL 16 and MariaDB 11.4 (2026-10-27): install 0.1.0 → seed both roles (2 lockdowns, outbox, receiver, replay, journal rows) → upgrade rc 0, `check_database_schema.php` "Database structure is ok.", all rows kept, new columns present (0.1.0 lockdowns `priorrecorded=0`) → restore dump with 0.1.0 code: version 2026102601, 0.1.0 columns and row counts, `upgrade.php` no-op; 5.3 × PostgreSQL 17 (2026-10-28): same sequence, schema ok, restore rc 0, `upgrade.php` "No upgrade needed", the 0.1.0 CLI (`cli/sync.php --status`) runs on the restored site | Release notes (CHANGELOG 0.2.0) match the code. Rollback = restore the pre-upgrade backup with the 0.1.0 code (Moodle cannot downgrade); verified on scratch DBs. |
+| **CS-02** manual completion as accepted compromise | TL; automatic condition: **GATE** | `classes/local/completion_adapter.php:185-260` (current_override, lockdown, release_lockdown), `:266` users_who_can_toggle; `classes/local/receiver/activity_manager.php:95` set_managed, `:204` ensure_lockdown (adopt), `:259` release_all_lockdowns; `classes/local/receiver/learner_view.php:95` prepare, `:124` set_hidecompletion, `:140` annotate_controls, `:191` notice; `classes/hook_callbacks.php`; `db/hooks.php`; `templates/managed_notice.mustache`; backup/restore of the bookkeeping | `lockdown_overrides_test` (0.1.0 overwrote and deleted a prior CAP_ALLOW – re-enacted; prior allow/prevent/prohibit/none restored exactly; later administrator decision kept, no silent re-lock; other roles' overrides byte-identical; teacher override works; uninstall restores; 0.1.0 rows keep 0.1.0 release; duplicate adopts prior), `learner_view_test` (real hooks through core's hook manager: activity header without control + explanatory state; control group unmanaged/released/teacher/admin unchanged; course page: core still exports the control → annotation script for exactly the locked activities), `backup_restore_test`, `uninstall_test`, gate tests; Behat "locked-down learner sees the completion state"; E2E (4.5 and 5.3 platforms): activity page notice `role="note"`, no header control, course page control `aria-disabled` + `aria-describedby` note, Enter/click inert, no error dialog, state unchanged, **axe-core WCAG 2.0/2.1/2.2 A+AA: 0 violations** in the notice and the controls; uninstall on scratch DBs: last `tools/uninstall/run.sh` run was with 0.1.0 (not repeated for 0.2.0; the prior-override restore on uninstall is covered by PHPUnit) | Advertised "manual tracking, server-controlled". Core 4.5–5.3 has a supported path only on the activity page (DOCUMENTATION 2.1 with file:line); course page / 5.3 navigation footer have no hook → accessible annotation (not hiding, not a security measure). Automatic completion condition: open core gate (no `FEATURE_COMPLETION_HAS_RULES`/custom completion in mod_lti), refused explicitly. Keyboard verified in E2E; screen-reader (NVDA) and German UI browse: NV. |
+| **CS-03** E2E reliability and replay protection | TL | `classes/local/connection.php:94` receiver_lookup; `classes/local/receiver/endpoint.php:81`; `classes/local/receiver/processor.php:216-270` (locks, versions, subjecthash); `classes/local/sender/dispatcher.php:64` (bounded run), `:145` (one probe per run); `classes/local/sender/outbox.php:226` retry_now, `:299` requeue_connection; `index.php` repair actions; `cli/sync.php` --resync/--retrynow | `trust_test` (foreign, case-variant, ambiguous – core unique index on `lti_types.clientid` –, inactive client ids; separate connections/contexts `wrong_tool`, foreign key, wrong deployment; tool key rotation fails closed + repair "Retry now"; platform key rotation + "Refresh platform keys"), `loopback_flow_test` (replay, out-of-order, lost answer, backoff, dead letter, parallel locks), `merge_integration_test::test_joined_sequences_are_ordered_by_provider_time`; E2E `robustness.spec.js`: **6/6 passed 2026-10-28** – storm: 18 concurrent signed requests (6 versions × first / duplicate / byte-identical replay) in 1.8 s through parallel php-fpm workers: 6 replays refused `409 replay`, older versions `rejected/stale_version`, applied sequence strictly increasing (1, 4, 5, 6, 7), final receiver state = provider state (version 7), grade 64 unchanged; six parallel CLI delivery processes: every version sent exactly once, all acked; interrupted network (`return 444` at the platform): `retry` with `transport_52`, attempts counted, nothing applied, "Retry now" after the outage → acked; E2E matrix: **passed 2026-10-28** (Chromium, `lticompletionsync.spec.js`, 24/24): B 5.3 → A 4.5, A 4.5 → B 5.3, A2 4.5 → A 4.5 and B2 5.3 → B 5.3 on two real sites each, loopback on A and on B – each: native completion, grade untouched, learner UI/a11y, revocation after cron + reload, duplicate/older message, admin levels/journal; `pseudonym_diagnostics.spec.js` 4/4 (pseudonym resolved, rotation fails closed, relaunch repair, tool_ltidiagnostics correlation) | Rotation of an ltisource_ltipseudonym pseudonym: old subject fails closed (dead letter, requeue fails closed again); the learner's next launch brings the new pseudonym and its state arrives (E2E `pseudonym_diagnostics.spec.js`). TLS: verification never disabled, untrusted certificates refused (curl), SSRF guard unchanged (`url_guard_test`). |
+| **CS-04** performance of the full reconciliation | TL (PHPUnit complexity tests + measured load test) | `classes/local/sender/source.php:115,140,271`; `classes/local/sender/reconciler.php:74,126,208`; `classes/local/sender/outbox.php:169` rows_for_targets, `:214` queue_drain; `classes/local/sender/dispatcher.php:64`; `classes/local/completion_adapter.php:266`; index `out(sourcekind, sourceid)` | `performance_test` (reads independent of unchanged accounts for reconcile and sweep, bounded per batch, one drain task, bounded outage run, lockdown verification ≤ 6 reads for 61 learners); **load test** `tools/load/run.sh 53` (10,000 LTI accounts, 100 resources, 20,000 relations, 10,000 completions, one course with 10,000 tracked learners) – see table below | Measured: memory bounded (≤ 18 MB above start in every phase), no ad hoc task per version (one drain task), delivery in runs of 500 rows (max 21 s PG / 30 s MariaDB per run). Boundaries: the first reconcile of a fully completed 10k connection costs ≈ 7 writes per new version (journal + standard log + outbox) – 3 min PG / 6 min MariaDB, once; core has no index on `course_modules_completion.timemodified` (sweep change query scans it once per run); the keyset batch query is a hash join on PG / range scan from the resource links on MariaDB (17 ms / 173 ms per batch of 500). |
+| **CS-05** grade independence, provider-only interoperability | TL | `classes/local/sender/ags_progress.php:66` capability_set, send (dedicated line item, no `scoreGiven`); `classes/local/status_report.php:36` level | `grade_snapshot_test` (every row/column of grade_items(_history), grade_grades(_history), grade_categories(_history) of both courses + `lti_submission` byte-identical through completion, duplicate/replay, revocation, teacher override re-asserted, sweep, full reconcile, force resync), `ags_progress_test` (dedicated line item, no `scoreGiven`, graded item never used; capability set → `toolonly` vs `nopartnernoags`), gate tests; E2E AGS reference check: **passed 2026-10-28** (B 5.3 tool → A 4.5 platform, platform completion endpoint answering 404 = no partner plugin): level `toolonly` from the granted capability set (1 of 1 links), rows `sent` / `tool_only_no_confirmation`; on A a dedicated line item `lticompletionsync-progress` (grade item 203, max 1, no grade) was created by core's AGS service, the graded item (64/100, history unchanged) untouched, native completion unchanged | Single ZIP with both roles: the same package is installed on all four stack sites (A, A2, B, B2) and plays both roles (loopback + directions). The "unmodified platform" is emulated at HTTP level (completion endpoint answers 404 like a Moodle without the plugin); the AGS processing on the platform is pure core (the plugin has no hook into mod_lti services – static gate test step 4). |
+| **CS-06** diagnostics/privacy | TL | `classes/local/status_report.php:72` outcomes, `:136` table; `index.php` report section; `cli/sync.php --report`; `classes/local/journal.php:120` redact; `classes/privacy/provider.php` | `report_test` (outcome report with causes from a real flow; one correlation id across sender and receiver journal and the standard log; no posted JWS part, key or bearer in journal/outbox/standard log; redaction cases), `privacy/provider_test`, `merge_integration_test`; E2E live report: **passed 2026-10-28** – tool: 9 successful, 2 revoked, retried `transport_52: 4`, failed none; platform: 4 applied, 4 revoked, retried `duplicate: 3`, `stale_version: 6` (JSON evidence in the test output); tool_ltidiagnostics optional (`pseudonym_diagnostics.spec.js` test 4, own status pages otherwise) | Mixed-version gate: protocol `v=1` checked by the receiver; the 0.1.0 ↔ 0.2.0 wire format is unchanged (A2/B2 run the same release; a 0.1.0 partner was not run). |
+| **P1 retention** (family integration test 2026-10-28): rows of activities in deleted courses, connections of deleted tool types | TL | `db/events.php:41-48`; `classes/observer.php:80,89`; `classes/local/orphan_cleanup.php:49,94` (bounded, LIMIT 5000/check); `classes/task/cleanup_task.php:45`; `db/upgrade.php:69-72` (2026102701, unbounded sweep once) | `orphan_cleanup_test`: real `delete_course()` of platform and tool course, enrol instance deletion, `lti_delete_type()` + deployment deletion + sweep, bounded sweep (3 per run), upgrade step from 2026102700 and cleanup task; 3 mutations killed. Stack: upgrade to 2026102701 via `e2e-mirror` (stack lock) on A, A2, B, B2; after it every site has 0 activity/receiver/outbox rows of missing modules and 0 connections of missing tool types or deployments (before: A already cleaned by an earlier family mirror at 15:01, A2 1, B 15 act + 15 rcv + 33 out + 15 receiver connections, B2 1) | Core triggers no event for `lti_delete_type()` or enrol_lti registration/deployment deletion: those connections go with the next sweep (daily task) or a published-tool deletion. |
+| **Account merge** (tool_mergeusers) | TL with stand-ins (tool_mergeusers not installed on the test sites) | `classes/local/merge_integration.php:58` db_settings, `:104` merge; `db/hooks.php` | `merge_integration_test` (settings: exceptions keyed by table name, compound indexes = install.xml, defaults not replaced; registration in core's hook manager; real loopback rows of two users on both sides → one row per target, newest wins, journal moved, idempotent; failure → merge error) | With the real tool_mergeusers: NV. |
 
-| Gate | Status | Evidence | Gaps |
-|---|---|---|---|
-| CS-G1 one package, sender and receiver also on the same site | **TL** | `loopback_flow_test` (18, both roles on one site through the real endpoint); Playwright scenarios `la` (4.5) and `lb` (5.3) through nginx | – |
-| CS-G2 4.5 to 5.3 statically confirmed and functionally tested per version | **TL**: all five versions × PostgreSQL/MariaDB (static checks, PHPUnit incl. gates and loopback, Behat); E2E on 4.5 and 5.3 | runner table | PHP 8.2/8.4 by the lead's matrix; E2E not on 5.0–5.2; CI not executed |
-| CS-G3 no unintended gradebook effect | **TL**, mutation-checked | `cs_g4_gate_test::test_step1_manual_set_and_revoke_without_grade_operations` (grades, history, items byte-identical), `loopback_flow_test::test_completion_arrives_natively_without_grade_effect` (existing grade 77), `test_revocation_is_stable_after_cron` (no grade created), E2E (existing grade and grade item count unchanged, 4 scenarios), `test_step4_no_direct_completion_table_writes_in_plugin` | the optional tool-only AGS level (off by default) creates a dedicated progress line item on the platform by design |
-| CS-G4 native mod_lti completion without core fork and without uncontrollable learner completion | **TL – met for manual completion tracking + server-side lockdown; not met for automatic tracking** (refused explicitly) | `tests/gates/cs_g4_gate_test.php` (14), E2E "learner cannot toggle it" (click refused, state unchanged), Behat lockdown scenario; mutation "CAP_PREVENT instead of CAP_PROHIBIT" killed | UX: core still shows the "Mark as done" button to locked-down learners (click fails); teachers with override capability can override (handled by conflict policy) |
-| CS-G5 revocation, replay protection, late delivery, reconciliation | **TL**, mutation-checked | `loopback_flow_test`: `test_revocation_is_stable_after_cron`, `test_replay_is_refused`, `test_lost_answer_retry_is_idempotent`, `test_out_of_order_old_version_is_rejected`, `test_backoff_and_dead_letter`, `test_course_resource_reports_course_completion_and_revocation` (sweep finds a revocation without an event); E2E revocation after cron + reload, duplicate/out-of-order | – |
-| CS-G6 role/capability detection, diagnostics integration, test matrix | **TL – met with tool_ltidiagnostics >= 2026102600 (0.2.1); without it, own reduced status page** | handshake and levels (`test_no_partner_plugin_is_declared`, `test_authentication_negatives` → partner "disabled", E2E admin levels "Receiver"/"Cooperative"); events with correlation id in the standard log of both sites (`plugin_contract_test::test_events`); E2E `pseudonym_diagnostics.spec.js` test 3: the correlation id produced by the transfer appears in tool_ltidiagnostics' timeline/evidence for the tool connection on B (plus the delivery task runs) and for the platform connection on A; reduced status pages without tool_ltidiagnostics (Behat, E2E) | with tool_ltidiagnostics < 2026102600 (0.2.0) the events are not read (only the task runs); PHP 8.2/8.4 by the lead's matrix; CI not executed |
+### Load test (CS-04), Moodle 5.3, scratch databases, 2026-10-27
 
-## DoD rows (spec section 8)
-
-| Test case | Status | Evidence |
+| Phase | PostgreSQL 17: s / peak MB / reads / writes | MariaDB 11.4: s / peak MB / reads / writes |
 |---|---|---|
-| 4.5→4.5 and 5.3→5.3: completion without grade creates **native** mod_lti completion | **TL** | E2E `la`, `lb`; PHPUnit loopback on every executed tree |
-| 4.5→5.3 and 5.3→4.5: identical behaviour in mixed versions | **TL** | E2E `ab` (A 4.5 tool → B 5.3 platform, second registration), `ba` (B 5.3 tool → A 4.5 platform, stack registration) |
-| 5.0, 5.1, 5.2: provider/consumer smoke with database matrix | **TL** (PHPUnit + Behat) | same-site loopback (both roles, real endpoint, real enrol_lti/auth_lti flows), gate tests and the 6 Behat scenarios on PostgreSQL and MariaDB; browser E2E on these versions **NV** |
-| No grade / existing grade: neither score nor gradebook value changes | **TL** | see CS-G3 |
-| Revocation: INCOMPLETE stays after cron and reload | **TL** | `test_revocation_is_stable_after_cron`, `cs_g4_gate_test::test_step1_revocation_survives_cron_and_cache_purge`, E2E test 2 of each scenario |
-| Lost answer, duplicate send, out-of-order: no double or backward booking, defined reconciliation | **TL** | `test_lost_answer_retry_is_idempotent` (one completion event only), `test_out_of_order_old_version_is_rejected`, `state_test::test_outbox_superseded_result_is_dropped`, `test_parallel_delivery_is_locked`, `test_receiver_target_is_locked`, E2E test 3 |
-| No AGS permission: understandable capability check instead of false success | **TL** | `ags_progress_test::test_missing_ags_permission_is_reported` (`blocked/ags_not_permitted`), tool-only level `test_progress_on_dedicated_line_item` (graded line item never used, no `scoreGiven`) |
-| No partner plugin: explicit declaration of reduced capabilities | **TL** | `test_no_partner_plugin_is_declared` (level "No partner plugin", `blocked/no_partner_plugin`), levels in the admin register |
-| Scoped pseudonyms / rotation: correct identity or documented fail-closed state | **TL** (PHPUnit with the real ltisource_ltipseudonym; E2E on the stack) | `test_pseudonym_integration_and_rotation`, `test_unresolvable_identity_fails_closed`; E2E `pseudonym_diagnostics.spec.js`: pseudonymous `sub` on the tool, resolved to the real learner on A (native completion, journal `identity_resolved=pseudonym`, second learner untouched); after rotation: B dead letter `identity_unresolved` visible in B's journal page, A unchanged for all learners, `service_pseudonym_miss` audit row and `rejected:identity_unresolved` journal row on A |
-| Privacy / permissions / SSRF: automatic negative tests | **TL** | `privacy/provider_test` (contexts, export, deletion, user deletion), `url_guard_test` (15 refused URLs, DNS rebinding), `state_test::test_connection_validation`, `test_authentication_negatives`, `navigation_test`, Behat (learner sees no management page, sender validation) |
-| Tests / CI: PHPUnit, Behat, UI-E2E, upgrade, restore/backup, parallel tasks; no skips counted as green | **TL** except CI | PHPUnit (no skips, `--fail-on-skipped`), Behat non-JS, Playwright, real upgrade run, `backup_restore_test` (duplicate, backup + restore into another course with deferred lockdown), `test_parallel_delivery_is_locked`; **CI not executed**; uninstall: `uninstall_test` + scratch-DB check (see above) |
+| first full reconcile (10,000 new versions) | 181.7 / 7.4 / 25,007 / 70,601 | 349.3 / 7.2 / 25,614 / 70,601 |
+| delivery of 10,000 rows (20 runs × 500, in-process signed answers) | 231.0 / 17.7 / 90,464 / 60,400 (max run 21.5 s) | 450.7 / 18.0 / 90,764 / 60,400 (max run 30.4 s) |
+| full reconcile, nothing changed (20,000 relations) | 1.3 / 1.5 / 4,183 / 0 | 6.2 / 1.2 / 4,183 / 0 |
+| sweep, nothing changed | 0.3 / 3.1 / 1,095 / 0 | 0.9 / 2.3 / 1,093 / 0 |
+| sweep, 1 % revoked (100 new versions) | 1.1 / 3.2 / 1,447 / 706 | 4.3 / 2.4 / 1,445 / 706 |
+| outage run (100 due rows, partner down) | 0.6 / 1.0 / 411 / 307 – **2 requests** | 1.2 / 1.0 / 411 / 307 – **2 requests** |
+| lockdown verification, 10,000 tracked learners | 0.05 / 0.1 / 5 / 0 | 0.17 / 0.1 / 5 / 0 |
 
-## Other acceptance items
+EXPLAIN (PG `ANALYZE, BUFFERS`; MariaDB `ANALYZE`): provider states = index scan (`course_modules_completion` unique
+user/cm index), existing outbox rows = index (`userid`), due rows = index (`status, nextattempt`), sweep keyset = primary
+key range; report = sequential scan of the journal (retention-bounded). Raw plans: `/home/claude/data/csync-load/53_<db>/results.json`.
 
-| Item | Status | Evidence |
+## Gates (spec section 9) and DoD rows (spec section 8)
+
+| Gate / DoD | Status | Evidence |
 |---|---|---|
-| Authenticated endpoint reusing the LTI 1.3 trust (no fake AGS endpoint) | TL | `test_authentication_negatives`, `keys_test`, E2E (real JWKS fetches over TLS in all four scenarios) |
-| Signed end-to-end acknowledgement (2xx alone is no confirmation) | TL | dispatcher only acks `applied ≥ version` (`test_lost_answer_retry_is_idempotent`, E2E) |
-| Outbox, ad hoc, delta sweep, full reconcile, backoff, dead letter | TL | `loopback_flow_test`, `state_test`, E2E `cron` stage |
-| Correlation id and the 11 events of spec section 7 | TL | `plugin_contract_test::test_events`, `test_completion_arrives_natively_without_grade_effect` (event trail) |
-| Reduced status view without tool_ltidiagnostics | TL | Behat (admin register, course status page), E2E (journal) |
-| Backup/restore of the per-activity setting | TL | `backup_restore_test` |
-| Conflict rules for local overrides | TL | `test_teacher_override_is_reasserted_with_provider_policy`, `test_teacher_override_is_kept_with_local_policy` |
-| Admin + teacher UI (en + de) | TL | Behat (en); `plugin_contract_test::test_language_parity` (de keys); German UI not browsed (NV) |
-| Accessibility check of the pages | NV | – |
+| CS-G1 one package, both roles, also on one site | TL | loopback PHPUnit; E2E loopback on A (4.5) and B (5.3); the same package on A, A2, B, B2 |
+| CS-G2 4.5–5.3 | TL on 4.5 and 5.3 (PG + MariaDB); 5.0–5.2 by the lead's matrix | runner table |
+| CS-G3 no gradebook effect | TL, mutation-checked | `grade_snapshot_test`, gate step 1/4, E2E (grade + item count unchanged, AGS reference keeps the graded item) |
+| CS-G4 native completion without fork, no uncontrollable learner completion | TL for manual tracking + lockdown; automatic: GATE | gate tests, CS-02 row |
+| CS-G5 revocation, replay, late delivery, reconcile | TL, mutation-checked | CS-03 row |
+| CS-G6 capability detection, diagnostics, matrix | TL | levels incl. AGS capability set, outcome report, tool_ltidiagnostics E2E |
+| 4.5→4.5 / 5.3→5.3 native completion on two real sites | TL (E2E passed 2026-10-28) | E2E `A2 -> A`, `B2 -> B` |
+| 4.5→5.3 / 5.3→4.5 | TL (E2E passed 2026-10-28) | E2E `ab`, `ba` |
+| Lost answer, duplicate, out-of-order, parallel | TL | PHPUnit + E2E storm / six parallel delivery processes |
+| No AGS permission / no partner plugin | TL | `ags_progress_test`, levels `nopartner`, `nopartnernoags`, `toolonly` |
+| Pseudonyms / rotation | TL | PHPUnit + E2E (fail closed, relaunch brings the new pseudonym); translator `API_VERSION >= 2` checked with `defined()` – older installed plugin fails closed with `pseudonym_api_unsupported`, absent plugin degrades to local ids (`identity_api_test`, mutation-checked) |
+| Privacy / permissions / SSRF | TL | privacy, navigation, url_guard, trust tests; Behat |
+| Upgrade, restore/backup, uninstall | TL | CS-01 row, `backup_restore_test`, `lockdown_overrides_test`, uninstall tests |
+
+## Mutation checks (`tools/mutation_check.py`)
+
+Run 2026-10-28 on 4.5/MariaDB: **15/15 killed**; the three retention mutations (course content deletion, sweep bound,
+connection of a deleted tool type) on 4.5/PostgreSQL 2026-10-28: **3/3 killed** (18 in total) – grade untouched, revocation, replay, out-of-order, pseudonym fail
+closed, CAP_PROHIBIT lockdown, audience check, prior override restore (CS-02), later administrator decision kept (CS-02),
+learner UI header path (CS-02), case-sensitive client id lookup (CS-03), audit redaction (CS-06), merge without
+duplicates, pseudonym translator API ≥ 2 (fail closed), bounded outage run (CS-04), retention (P1) ×3.
+
+## Not verified / open
+
+* Automatic completion condition for mod_lti (open core gate; upstream proposal in DOCUMENTATION 2.1/2.2).
+* GitHub CI of the delivered SHA (owner); PHP 8.2/8.4 and Moodle 5.0–5.2 cells (lead's matrix); Behat `@javascript`
+  (none; the JavaScript annotation is covered by Playwright).
+* Real tool_mergeusers installation; screen reader (NVDA) session; German UI browse; a 0.1.0 partner talking to 0.2.0.

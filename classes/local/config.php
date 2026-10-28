@@ -108,6 +108,24 @@ class config {
     }
 
     /**
+     * Maximum number of outbox rows one delivery run (drain task, sweep) processes.
+     *
+     * @return int
+     */
+    public static function batch_limit(): int {
+        return self::int('batchlimit', 500, 10, 10000);
+    }
+
+    /**
+     * Maximum seconds one delivery run spends before leaving the rest to the next run.
+     *
+     * @return int
+     */
+    public static function time_budget(): int {
+        return self::int('timebudget', 120, 5, 1800);
+    }
+
+    /**
      * Exponential backoff delay for an attempt number (1 = first retry), without jitter.
      *
      * @param int $attempt

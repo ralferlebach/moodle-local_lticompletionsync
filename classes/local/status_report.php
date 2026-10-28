@@ -41,7 +41,12 @@ class status_report {
             case connection::PARTNER_PLUGIN:
                 return ['key' => 'cooperative', 'ok' => true];
             case connection::PARTNER_NOPLUGIN:
-                return ['key' => $con->agsprogress ? 'toolonly' : 'nopartner', 'ok' => false];
+                if (!$con->agsprogress) {
+                    return ['key' => 'nopartner', 'ok' => false];
+                }
+                // Judge the platform by the AGS capabilities it actually granted at launch.
+                $ags = \local_lticompletionsync\local\sender\ags_progress::capability_set($con);
+                return ['key' => $ags['progress'] > 0 ? 'toolonly' : 'nopartnernoags', 'ok' => false, 'ags' => $ags];
             case connection::PARTNER_DISABLED:
                 return ['key' => 'partnerdisabled', 'ok' => false];
             case connection::PARTNER_ERROR:
@@ -49,6 +54,105 @@ class status_report {
             default:
                 return ['key' => 'unknown', 'ok' => false];
         }
+    }
+
+    /**
+     * Live outcome report per connection (CS-06): success, failure, revocation and retries with their causes, from
+     * the plugin's own journal (works without tool_ltidiagnostics). One grouped query; causes are codes only.
+     *
+     * Sender rows: success = acknowledged "applied", failed = dead letters by cause, revoked = revocation versions
+     * queued, retried = scheduled retries by cause. Receiver rows: success = completions applied, revoked =
+     * completions revoked, failed = rejected messages by reason, retried = repeated deliveries answered from the stored
+     * state (duplicates) and outdated versions refused.
+     *
+     * @param int $window seconds back from now
+     * @param int|null $now
+     * @return array connection id => [role, label, success, revoked, failed (cause => n), retried (cause => n)]
+     */
+    public static function outcomes(int $window, ?int $now = null): array {
+        global $DB;
+        $since = ($now ?? time()) - $window;
+        $rows = $DB->get_recordset_sql(
+            "SELECT connectionid, eventname, detail, COUNT(1) AS c
+               FROM {" . journal::TABLE . "}
+              WHERE timecreated >= :since
+           GROUP BY connectionid, eventname, detail",
+            ['since' => $since]
+        );
+        $report = [];
+        foreach (connection::all() as $con) {
+            $report[(int) $con->id] = ['role' => $con->role, 'label' => connection::label($con), 'success' => 0,
+                'revoked' => 0, 'failed' => [], 'retried' => []];
+        }
+        foreach ($rows as $row) {
+            $cid = (int) $row->connectionid;
+            if (!isset($report[$cid])) {
+                continue;
+            }
+            $n = (int) $row->c;
+            $detail = (string) $row->detail;
+            $r = &$report[$cid];
+            if ($r['role'] === connection::ROLE_SENDER) {
+                if ($row->eventname === 'acknowledged' && $detail === 'applied') {
+                    $r['success'] += $n;
+                } else if ($row->eventname === 'queued' && $detail === 'state=0') {
+                    $r['revoked'] += $n;
+                } else if ($row->eventname === 'dead_letter') {
+                    $r['failed'][$detail] = ($r['failed'][$detail] ?? 0) + $n;
+                } else if ($row->eventname === 'retry_scheduled') {
+                    $cause = explode(':+', $detail)[0];
+                    $r['retried'][$cause] = ($r['retried'][$cause] ?? 0) + $n;
+                }
+            } else {
+                if ($row->eventname === 'completion_applied') {
+                    $r['success'] += $n;
+                } else if ($row->eventname === 'completion_revoked') {
+                    $r['revoked'] += $n;
+                } else if ($row->eventname === 'reconciled' && strpos($detail, 'rejected:') === 0) {
+                    $cause = substr($detail, 9);
+                    $r['failed'][$cause] = ($r['failed'][$cause] ?? 0) + $n;
+                } else if ($row->eventname === 'reconciled' && ($detail === 'duplicate' || strpos($detail, 'stale:') === 0)) {
+                    $cause = $detail === 'duplicate' ? 'duplicate' : 'stale_version';
+                    $r['retried'][$cause] = ($r['retried'][$cause] ?? 0) + $n;
+                }
+            }
+            unset($r);
+        }
+        $rows->close();
+        foreach ($report as &$r) {
+            ksort($r['failed']);
+            ksort($r['retried']);
+        }
+        unset($r);
+        return $report;
+    }
+
+    /**
+     * Render the outcome report.
+     *
+     * @param array $report from outcomes()
+     * @return string HTML
+     */
+    public static function outcomes_table(array $report): string {
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable local-lticompletionsync-report';
+        $table->head = [
+            get_string('connection', 'local_lticompletionsync'), get_string('report_success', 'local_lticompletionsync'),
+            get_string('report_revoked', 'local_lticompletionsync'), get_string('report_failed', 'local_lticompletionsync'),
+            get_string('report_retried', 'local_lticompletionsync'),
+        ];
+        $causes = function (array $list): string {
+            $out = [];
+            foreach ($list as $cause => $n) {
+                $out[] = s($cause === '' ? '-' : $cause) . ': ' . (int) $n;
+            }
+            return $out ? implode(\html_writer::empty_tag('br'), $out) : '0';
+        };
+        foreach ($report as $r) {
+            $table->data[] = [s($r['label']), (int) $r['success'], (int) $r['revoked'], $causes($r['failed']),
+                $causes($r['retried'])];
+        }
+        return \html_writer::table($table);
     }
 
     /**
@@ -85,7 +189,8 @@ class status_report {
             'env_completionhook' => completion_adapter::has_completion_hook() ? get_string('yes') : get_string('no'),
             'env_toolkey' => get_config('enrol_lti', 'lti_13_kid') ? get_string('yes') : get_string('no'),
             'env_platformkey' => get_config('mod_lti', 'kid') ? get_string('yes') : get_string('no'),
-            'env_pseudonyms' => identity_resolver::pseudonym_service_available() ? get_string('yes') : get_string('no'),
+            'env_pseudonyms' => identity_resolver::pseudonym_service_available() ? get_string('yes') :
+                get_string('no') . ' (API ' . identity_resolver::translator_api_version() . ')',
             'env_diagnostics' => ($diag && is_dir($diag)) ? get_string('yes') : get_string('no'),
             'env_endpoint' => protocol::endpoint_url(),
             'env_privatetargets' => config::allow_private_targets() ? get_string('yes') : get_string('no'),

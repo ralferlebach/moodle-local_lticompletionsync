@@ -47,11 +47,13 @@ if ($action !== '') {
         throw new moodle_exception('error_connection', 'local_lticompletionsync');
     }
     $message = '';
+    $senderonly = ['probe', 'reconcile', 'resync', 'retrynow', 'requeue', 'refreshkeys'];
+    if (in_array($action, $senderonly, true) && $con->role !== connection::ROLE_SENDER) {
+        throw new moodle_exception('invalidaction', 'error');
+    }
     switch ($action) {
         case 'toggle':
-            $DB->update_record(connection::TABLE, (object) [
-                'id' => $con->id, 'enabled' => $con->enabled ? 0 : 1, 'usermodified' => $USER->id, 'timemodified' => time(),
-            ]);
+            connection::set_enabled((int) $con->id, !$con->enabled);
             $message = get_string('saved', 'local_lticompletionsync');
             break;
         case 'probe':
@@ -67,13 +69,24 @@ if ($action !== '') {
             $message = get_string('reconcilequeued', 'local_lticompletionsync');
             break;
         case 'requeue':
-            $rows = $DB->get_records_select(outbox::TABLE, 'connectionid = :id AND status IN (:dead, :blocked)', [
-                'id' => $con->id, 'dead' => outbox::STATUS_DEAD, 'blocked' => outbox::STATUS_BLOCKED,
-            ], '', 'id');
-            foreach ($rows as $row) {
-                outbox::requeue((int) $row->id);
-            }
-            $message = get_string('requeued', 'local_lticompletionsync', count($rows));
+            $message = get_string('requeued', 'local_lticompletionsync', outbox::requeue_connection((int) $con->id));
+            break;
+        case 'resync':
+            // Force resync: every target gets a new version with the current provider state, even if unchanged.
+            $task = new \local_lticompletionsync\task\reconcile_task();
+            $task->set_custom_data(['connectionid' => (int) $con->id, 'force' => 1]);
+            \core\task\manager::queue_adhoc_task($task, true);
+            $message = get_string('resyncqueued', 'local_lticompletionsync');
+            break;
+        case 'retrynow':
+            $message = get_string('retrynowdone', 'local_lticompletionsync', outbox::retry_now((int) $con->id));
+            break;
+        case 'refreshkeys':
+            // After a key rotation at the platform: forget the cached key set and check the partner again.
+            \cache::make('local_lticompletionsync', 'platformkeys')->purge();
+            $status = (new channel())->probe($con);
+            $message = get_string('keysrefreshed', 'local_lticompletionsync') . ' ' .
+                get_string('partner_' . $status, 'local_lticompletionsync');
             break;
         case 'delete':
             if (!optional_param('confirm', 0, PARAM_BOOL)) {
@@ -126,10 +139,14 @@ if (!$connections) {
     ];
     foreach ($connections as $con) {
         $level = status_report::level($con);
+        $description = get_string('level_' . $level['key'] . '_desc', 'local_lticompletionsync');
+        if (isset($level['ags'])) {
+            $description .= ' ' . get_string('agscapability', 'local_lticompletionsync', (object) $level['ags']);
+        }
         $levelhtml = $OUTPUT->render_from_template('local_lticompletionsync/level', [
             'ok' => $level['ok'],
             'label' => get_string('level_' . $level['key'], 'local_lticompletionsync'),
-            'description' => get_string('level_' . $level['key'] . '_desc', 'local_lticompletionsync'),
+            'description' => $description,
         ]);
         $counts = [];
         foreach (status_report::counts($con) as $status => $count) {
@@ -142,7 +159,8 @@ if (!$connections) {
         );
         $acts = ['toggle' => $con->enabled ? 'disable' : 'enable', 'delete' => 'delete'];
         if ($con->role === connection::ROLE_SENDER) {
-            $acts = ['probe' => 'probe', 'reconcile' => 'reconcile', 'requeue' => 'requeue'] + $acts;
+            $acts = ['probe' => 'probe', 'reconcile' => 'reconcile', 'resync' => 'resync', 'retrynow' => 'retrynow',
+                'requeue' => 'requeue', 'refreshkeys' => 'refreshkeys'] + $acts;
         }
         foreach ($acts as $act => $label) {
             $actions[] = $OUTPUT->single_button(
@@ -174,6 +192,10 @@ foreach (status_report::environment() as $key => $value) {
     $env->data[] = [get_string($key, 'local_lticompletionsync'), s($value)];
 }
 echo html_writer::table($env);
+
+echo $OUTPUT->heading(get_string('report', 'local_lticompletionsync'), 3);
+echo html_writer::div(get_string('report_intro', 'local_lticompletionsync'), 'mb-2');
+echo status_report::outcomes_table(status_report::outcomes(DAYSECS));
 
 echo $OUTPUT->heading(get_string('journal', 'local_lticompletionsync'), 3);
 if ($correlationid !== '') {

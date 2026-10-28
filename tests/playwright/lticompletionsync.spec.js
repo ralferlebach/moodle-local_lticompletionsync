@@ -26,7 +26,7 @@
  */
 
 const { test, expect } = require('@playwright/test');
-const { e2e, csync, buildScenario, launchAsLearner } = require('./lib');
+const { e2e, csync, buildScenario, launchAsLearner, loadSeed, siteInstalled, axeViolations } = require('./lib');
 
 const DIRECTIONS = [
   { title: 'B (5.3 tool) -> A (4.5 platform), stack registration', platform: 'a', tool: 'b', scenario: 'ba',
@@ -37,6 +37,11 @@ const DIRECTIONS = [
     learner: 'csyncstudentla', grade: 30 },
   { title: 'loopback on B (5.3): sender and receiver on one site', platform: 'b', tool: 'b', scenario: 'lb',
     learner: 'csyncstudentlb', grade: 20 },
+  // Same-version pairs on two real sites (partner sites A2/B2 of the stack, e2e-pair-setup).
+  { title: 'A2 (4.5 tool) -> A (4.5 platform), two 4.5 sites', platform: 'a', tool: 'a2', scenario: 'a2a',
+    learner: 'csyncstudenta2a', grade: 35, pair: 'a2' },
+  { title: 'B2 (5.3 tool) -> B (5.3 platform), two 5.3 sites', platform: 'b', tool: 'b2', scenario: 'b2b',
+    learner: 'csyncstudentb2b', grade: 25, pair: 'b2' },
 ];
 
 e2e.screenshotOnFailure(test);
@@ -55,13 +60,42 @@ async function relogin(page, site, sc, seed) {
   await e2e.login(page, site, { username: sc.learner.username, password: sc.learner.password }, seed);
 }
 
+/**
+ * Every manual completion control of an activity on the current page: marked unavailable and described by the note.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {number} cmid
+ */
+async function expectAnnotatedControls(page, cmid) {
+  const toggles = page.locator(`button[data-action="toggle-manual-completion"][data-cmid="${cmid}"]`);
+  const n = await toggles.count();
+  for (let i = 0; i < n; i++) {
+    const t = toggles.nth(i);
+    await expect(t).toHaveAttribute('aria-disabled', 'true');
+    const describedby = await t.getAttribute('aria-describedby');
+    await expect(page.locator(`#${describedby}`)).toHaveText('Set by the external tool');
+  }
+  return n;
+}
+
+/**
+ * The activity page (view.php?forceview=1) embeds the tool launch in an iframe. A launch would complete the tool's page
+ * again (completion on view) and, on a loopback site, replace the learner's session by the tool account: blocked.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+async function noLaunch(page) {
+  await page.route(/\/mod\/lti\/launch\.php/, (route) => route.abort());
+}
+
 for (const d of DIRECTIONS) {
   test.describe.serial(d.title, () => {
     let seed;
     let sc;
 
     test.beforeAll(() => {
-      seed = e2e.loadSeed();
+      test.skip(d.pair && !siteInstalled(d.pair), `partner site ${d.pair} of the stack is not installed (e2e-pair-setup)`);
+      seed = loadSeed();
       sc = buildScenario(seed, { platform: d.platform, tool: d.tool, scenario: d.scenario, learner: d.learner,
         grade: d.grade, reusetype: d.reuse ? seed.lti.platform.type_id : 0 });
     });
@@ -83,14 +117,33 @@ for (const d of DIRECTIONS) {
       expect(after.gradeitems).toBe(before.gradeitems);
       expect(after.canself).toBe(false);
 
-      // The platform course page shows the native completion; the learner's own toggle is refused server side.
+      // Activity page: core's header has no manual control; the explanatory state is shown instead (CS-02).
       await relogin(page, d.platform, sc, seed);
+      await noLaunch(page);
+      await page.goto(`${sc.p2.viewurl}&forceview=1`);
+      const notice = page.locator(`[data-region="local-lticompletionsync-managed"][data-cmid="${sc.p2.cmid}"]`);
+      await expect(notice).toBeVisible();
+      await expect(notice).toHaveAttribute('role', 'note');
+      await expect(notice).toContainText('Done (confirmed by the external tool).');
+      await expect(page.locator(`.activity-header button[data-action="toggle-manual-completion"]`)).toHaveCount(0);
+      await expectAnnotatedControls(page, sc.p2.cmid); // 5.3 linear navigation footer, if shown.
+      expect(await axeViolations(page, ['[data-region="local-lticompletionsync-managed"]',
+        'button[data-action="toggle-manual-completion"]'])).toEqual([]);
+
+      // Course page: core renders the control (no hook there); it is marked unavailable, described, inert.
       await page.goto(sc.p2.courseurl);
       const toggle = page.locator(`[data-action="toggle-manual-completion"][data-cmid="${sc.p2.cmid}"]`).first();
       await expect(toggle).toBeVisible();
       await expect(toggle).toHaveAttribute('data-toggletype', 'manual:undo');
-      await toggle.click();
+      expect(await expectAnnotatedControls(page, sc.p2.cmid)).toBeGreaterThanOrEqual(1);
+      expect(await axeViolations(page, ['button[data-action="toggle-manual-completion"]',
+        '.local-lticompletionsync-note'])).toEqual([]);
+      await toggle.focus();
+      await page.keyboard.press('Enter');
+      await toggle.click({ force: true });
       await page.waitForTimeout(1500);
+      // No error dialog (dead end) and no state change.
+      await expect(page.locator('.modal.show')).toHaveCount(0);
       await page.reload();
       expect(state().state).toBe(1);
     });
@@ -109,6 +162,10 @@ for (const d of DIRECTIONS) {
       await page.goto(sc.p2.courseurl);
       const toggle = page.locator(`[data-action="toggle-manual-completion"][data-cmid="${sc.p2.cmid}"]`).first();
       await expect(toggle).toHaveAttribute('data-toggletype', 'manual:mark-done');
+      await expectAnnotatedControls(page, sc.p2.cmid);
+      await noLaunch(page);
+      await page.goto(`${sc.p2.viewurl}&forceview=1`);
+      await expect(page.locator('[data-region="local-lticompletionsync-managed"]')).toContainText('Not done yet.');
     });
 
     test('a duplicate and an older message change nothing', async () => {

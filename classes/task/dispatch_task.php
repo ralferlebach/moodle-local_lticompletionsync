@@ -31,6 +31,7 @@ class dispatch_task extends \core\task\adhoc_task {
      */
     public function execute() {
         $data = $this->get_custom_data();
+        \local_lticompletionsync\local\sender\source::reset_caches();
         $dispatcher = new dispatcher();
         if (!empty($data->outid)) {
             $status = $dispatcher->deliver((int) $data->outid);

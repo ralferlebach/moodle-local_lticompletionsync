@@ -53,9 +53,10 @@ class outbox {
      * @param \stdClass $target from source::targets_for()
      * @param int $state 1 or 0
      * @param string $trigger short code (observer, sweep, reconcile)
+     * @param bool $force raise the version even when the state is unchanged (administrator "force resync")
      * @return \stdClass|null the row when a new version was created, null when nothing changed
      */
-    public static function record_state(\stdClass $target, int $state, string $trigger): ?\stdClass {
+    public static function record_state(\stdClass $target, int $state, string $trigger, bool $force = false): ?\stdClass {
         global $DB;
         $key = [
             'connectionid' => (int) $target->connection->id,
@@ -89,7 +90,7 @@ class outbox {
                 }
                 $row = $DB->get_record(self::TABLE, ['id' => $id], '*', MUST_EXIST);
             } else {
-                if ((int) $row->desiredstate === $state) {
+                if ((int) $row->desiredstate === $state && !$force) {
                     return null;
                 }
                 $old = (int) $row->version;
@@ -149,17 +150,91 @@ class outbox {
     }
 
     /**
-     * Course of the source of a row (for journal and status pages).
+     * Key of a target in the result of rows_for_targets().
+     *
+     * @param \stdClass $target
+     * @return string
+     */
+    public static function target_key(\stdClass $target): string {
+        $cid = isset($target->connection) ? (int) $target->connection->id : (int) $target->connectionid;
+        return $cid . '/' . (int) $target->resourcelinkid . '/' . (int) $target->userid;
+    }
+
+    /**
+     * Existing outbox rows of a batch of targets (one query per connection and batch).
+     *
+     * @param \stdClass[] $targets
+     * @return array target_key => row
+     */
+    public static function rows_for_targets(array $targets): array {
+        global $DB;
+        $byconnection = [];
+        $links = [];
+        foreach ($targets as $target) {
+            $cid = (int) $target->connection->id;
+            $byconnection[$cid][(int) $target->userid] = true;
+            $links[$cid][(int) $target->resourcelinkid] = true;
+        }
+        $rows = [];
+        foreach ($byconnection as $cid => $users) {
+            // Prefix (connectionid, resourcelinkid) of the unique index "target", then the user ids.
+            [$rlsql, $rlparams] = $DB->get_in_or_equal(array_keys($links[$cid]), SQL_PARAMS_NAMED, 'rl');
+            foreach (array_chunk(array_keys($users), source::BATCH) as $chunk) {
+                [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'u');
+                $found = $DB->get_records_select(
+                    self::TABLE,
+                    "connectionid = :cid AND resourcelinkid $rlsql AND userid $insql",
+                    ['cid' => $cid] + $rlparams + $params
+                );
+                foreach ($found as $row) {
+                    $rows[self::target_key($row)] = $row;
+                }
+            }
+        }
+        return $rows;
+    }
+
+    /**
+     * Course of the source of a row (for journal and status pages; cached per run).
      *
      * @param \stdClass $row
      * @return int
      */
     public static function course_of(\stdClass $row): int {
-        global $DB;
         if ($row->sourcekind === source::KIND_COURSE) {
             return (int) $row->sourceid;
         }
-        return (int) $DB->get_field('course_modules', 'course', ['id' => $row->sourceid]);
+        return source::course_of_cm((int) $row->sourceid);
+    }
+
+    /**
+     * Queue one deduplicated drain task that delivers all due rows (used by sweep, reconcile and administrator
+     * actions instead of one ad hoc task per row).
+     */
+    public static function queue_drain(): void {
+        $task = new \local_lticompletionsync\task\dispatch_task();
+        $task->set_custom_data(['drain' => 1]);
+        \core\task\manager::queue_adhoc_task($task, true);
+    }
+
+    /**
+     * Make the retry rows of a connection due now (administrator repair after an outage or a key change).
+     *
+     * @param int $connectionid
+     * @return int number of rows
+     */
+    public static function retry_now(int $connectionid): int {
+        global $DB;
+        $params = ['cid' => $connectionid, 'retry' => self::STATUS_RETRY];
+        $count = $DB->count_records_select(self::TABLE, 'connectionid = :cid AND status = :retry', $params);
+        if ($count) {
+            $DB->execute(
+                'UPDATE {' . self::TABLE . '} SET nextattempt = 0 WHERE connectionid = :cid AND status = :retry',
+                $params
+            );
+            self::queue_drain();
+        }
+        return $count;
     }
 
     /**
@@ -195,11 +270,13 @@ class outbox {
 
     /**
      * Put a dead or blocked row back into the queue (administrator action). The version is kept: the receiver
-     * answers a repeated version idempotently.
+     * answers a repeated version idempotently. The subject is read again at delivery, so a learner who launched
+     * again after a pseudonym rotation is reached with the new pseudonym (repair path of a fail-closed rotation).
      *
      * @param int $rowid
+     * @param bool $queue queue an ad hoc delivery for the row
      */
-    public static function requeue(int $rowid): void {
+    public static function requeue(int $rowid, bool $queue = true): void {
         global $DB;
         $DB->update_record(self::TABLE, (object) [
             'id' => $rowid,
@@ -208,7 +285,29 @@ class outbox {
             'nextattempt' => 0,
             'timemodified' => time(),
         ]);
-        self::queue_delivery($rowid);
+        if ($queue) {
+            self::queue_delivery($rowid);
+        }
+    }
+
+    /**
+     * Requeue all dead and blocked rows of a connection (administrator action, one drain task).
+     *
+     * @param int $connectionid
+     * @return int number of rows
+     */
+    public static function requeue_connection(int $connectionid): int {
+        global $DB;
+        $rows = $DB->get_fieldset_select(self::TABLE, 'id', 'connectionid = :id AND status IN (:dead, :blocked)', [
+            'id' => $connectionid, 'dead' => self::STATUS_DEAD, 'blocked' => self::STATUS_BLOCKED,
+        ]);
+        foreach ($rows as $rowid) {
+            self::requeue((int) $rowid, false);
+        }
+        if ($rows) {
+            self::queue_drain();
+        }
+        return count($rows);
     }
 
     /**

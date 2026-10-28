@@ -64,6 +64,7 @@ class provider implements
             'remotestate' => 'privacy:metadata:rcv:remotestate',
             'remoteversion' => 'privacy:metadata:rcv:remoteversion',
             'status' => 'privacy:metadata:rcv:status',
+            'subjecthash' => 'privacy:metadata:rcv:subjecthash',
             'timemodified' => 'privacy:metadata:timemodified',
         ], 'privacy:metadata:rcv');
         $collection->add_database_table('local_lticompletionsync_log', [

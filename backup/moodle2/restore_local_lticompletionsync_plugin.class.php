@@ -24,6 +24,8 @@
 class restore_local_lticompletionsync_plugin extends restore_local_plugin {
     /** @var bool Whether the restored activity is managed. */
     protected $restoredenabled = false;
+    /** @var array|null Lockdown bookkeeping of the source activity. */
+    protected $restoredlockdown = null;
 
     /**
      * Module level paths.
@@ -42,6 +44,15 @@ class restore_local_lticompletionsync_plugin extends restore_local_plugin {
     public function process_lticompletionsync_activity($data) {
         $data = (object) $data;
         $this->restoredenabled = !empty($data->enabled);
+        if (!empty($data->lockedroleid)) {
+            // Backups of 0.1.0 have no lockdown fields: nothing to adopt then.
+            $prior = $data->priorpermission ?? null;
+            $this->restoredlockdown = [
+                'lockedroleid' => (int) $data->lockedroleid,
+                'priorrecorded' => (int) !empty($data->priorrecorded),
+                'priorpermission' => ($prior === null || $prior === '' || $prior === '$@NULL@$') ? null : (int) $prior,
+            ];
+        }
     }
 
     /**
@@ -61,7 +72,7 @@ class restore_local_lticompletionsync_plugin extends restore_local_plugin {
         }
         try {
             // Deferred lockdown: core's duplicate_module() copies the permission overrides only after the restore.
-            \local_lticompletionsync\local\receiver\activity_manager::set_managed($cm, true, true);
+            \local_lticompletionsync\local\receiver\activity_manager::set_managed($cm, true, true, $this->restoredlockdown);
         } catch (\moodle_exception $e) {
             // Not manageable in the target (no receiver connection, automatic tracking): keep it unmanaged.
             $this->step->log(

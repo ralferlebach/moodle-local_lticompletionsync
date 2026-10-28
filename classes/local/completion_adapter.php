@@ -166,61 +166,119 @@ class completion_adapter {
         return (int) ($CFG->defaultuserroleid ?? 0);
     }
 
+    /** @var string Release outcome: the override that existed before the lockdown was written back. */
+    public const RELEASE_RESTORED = 'restored';
+    /** @var string Release outcome: there was no override before, the prohibition was removed. */
+    public const RELEASE_REMOVED = 'removed';
+    /** @var string Release outcome: somebody changed or removed the prohibition meanwhile; that decision is kept. */
+    public const RELEASE_KEPT = 'kept_changed';
+    /** @var string Release outcome: nothing to release. */
+    public const RELEASE_NONE = 'none';
+
+    /**
+     * The explicit override of a role for the toggle capability in a context (null when there is none).
+     *
+     * @param \context $context
+     * @param int $roleid
+     * @return int|null CAP_* constant
+     */
+    public static function current_override(\context $context, int $roleid): ?int {
+        global $DB;
+        $permission = $DB->get_field('role_capabilities', 'permission', [
+            'contextid' => $context->id, 'roleid' => $roleid, 'capability' => self::TOGGLE_CAPABILITY,
+        ]);
+        return $permission === false ? null : (int) $permission;
+    }
+
     /**
      * Prohibit learner self-toggling in the module context.
      *
      * A CAP_PROHIBIT for the authenticated-user role is needed: a CAP_PREVENT for the student role alone does not
-     * remove the CAP_ALLOW that the authenticated-user archetype holds (proved by the gate tests).
+     * remove the CAP_ALLOW that the authenticated-user archetype holds (proved by the gate tests). An explicit override
+     * that an administrator or teacher set before for that role in the activity is read first and returned, so that
+     * release_lockdown() can write it back exactly. Overrides of other roles are never touched.
      *
      * @param \cm_info $cm
-     * @return int role id the prohibition was written for (0 when none could be written)
+     * @return array [roleid (0 when none could be written), prior permission (int CAP_* or null when there was none)]
      */
-    public static function lockdown(\cm_info $cm): int {
+    public static function lockdown(\cm_info $cm): array {
         $roleid = self::lockdown_roleid();
         if ($roleid <= 0) {
-            return 0;
+            return [0, null];
         }
         $context = \context_module::instance($cm->id);
-        assign_capability(self::TOGGLE_CAPABILITY, CAP_PROHIBIT, $roleid, $context->id, true);
+        $prior = self::current_override($context, $roleid);
+        if ($prior !== CAP_PROHIBIT) {
+            assign_capability(self::TOGGLE_CAPABILITY, CAP_PROHIBIT, $roleid, $context->id, true);
+        }
         $context->mark_dirty();
-        return $roleid;
+        return [$roleid, $prior];
     }
 
     /**
-     * Remove a prohibition written by lockdown().
+     * Remove a prohibition written by lockdown() and restore the override it replaced.
      *
-     * @param \cm_info $cm
+     * Only acts while the current override is still the prohibition: when an administrator changed or removed it
+     * during the management, that later decision is kept. Rows of 0.1.0 ($priorrecorded false) did not remember the
+     * prior override; for them the prohibition is removed (the 0.1.0 behaviour).
+     *
+     * @param \context $context module context
      * @param int $roleid
+     * @param bool $priorrecorded whether $prior is known
+     * @param int|null $prior permission before the lockdown (null: there was no override)
+     * @return string RELEASE_* constant
      */
-    public static function release_lockdown(\cm_info $cm, int $roleid): void {
+    public static function release_lockdown(
+        \context $context,
+        int $roleid,
+        bool $priorrecorded = false,
+        ?int $prior = null
+    ): string {
         if ($roleid <= 0) {
-            return;
+            return self::RELEASE_NONE;
         }
-        $context = \context_module::instance($cm->id);
+        if (self::current_override($context, $roleid) !== CAP_PROHIBIT) {
+            return self::RELEASE_KEPT;
+        }
+        if ($priorrecorded && $prior !== null && $prior !== CAP_INHERIT) {
+            if ($prior !== CAP_PROHIBIT) {
+                assign_capability(self::TOGGLE_CAPABILITY, $prior, $roleid, $context->id, true);
+            }
+            $context->mark_dirty();
+            return self::RELEASE_RESTORED;
+        }
         unassign_capability(self::TOGGLE_CAPABILITY, $roleid, $context->id);
         $context->mark_dirty();
+        return self::RELEASE_REMOVED;
     }
 
     /**
-     * Tracked (enrolled, reported) users who can still toggle their own completion of the activity.
+     * Tracked users (active enrolment, reported in completion) who can still toggle their own completion.
      *
-     * Used to verify the lockdown: an empty list means the server-side guard is complete for the current learners.
+     * Used to verify the lockdown: zero means the server-side guard is complete for the current learners. One COUNT
+     * query and one bounded sample query (no materialisation of the course's users, no has_capability() per user).
+     * Site administrators are not counted (they are never tracked through a role and bypass capability checks).
      *
      * @param \cm_info $cm
-     * @return int[] user ids
+     * @param int $samplesize number of user ids to return as a sample
+     * @return array count (int), sample (int[] user ids, at most $samplesize)
      */
-    public static function users_who_can_toggle(\cm_info $cm): array {
-        self::require_lib();
+    public static function users_who_can_toggle(\cm_info $cm, int $samplesize = 20): array {
+        global $DB;
+        $coursecontext = \context_course::instance($cm->course);
         $context = \context_module::instance($cm->id);
-        $completion = new \completion_info($cm->get_course());
-        $tracked = $completion->get_tracked_users();
-        $result = [];
-        foreach ($tracked as $user) {
-            if (has_capability(self::TOGGLE_CAPABILITY, $context, (int) $user->id)) {
-                $result[] = (int) $user->id;
-            }
+        $tracked = get_enrolled_with_capabilities_join($coursecontext, '', 'moodle/course:isincompletionreports', 0, true);
+        $can = get_with_capability_join($context, self::TOGGLE_CAPABILITY, 'u.id');
+        if ($tracked->cannotmatchanyrows || $can->cannotmatchanyrows) {
+            return ['count' => 0, 'sample' => []];
         }
-        return $result;
+        $from = "FROM {user} u {$tracked->joins} {$can->joins} WHERE {$tracked->wheres} AND {$can->wheres}";
+        $params = array_merge($tracked->params, $can->params);
+        $count = (int) $DB->count_records_sql("SELECT COUNT(DISTINCT u.id) $from", $params);
+        $sample = $count === 0 ? [] : array_map('intval', array_keys(
+            $DB->get_records_sql("SELECT DISTINCT u.id $from ORDER BY u.id", $params, 0, $samplesize)
+        ));
+        return ['count' => $count, 'sample' => $sample];
     }
 
     /**

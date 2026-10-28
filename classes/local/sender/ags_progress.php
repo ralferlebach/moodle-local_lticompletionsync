@@ -56,6 +56,41 @@ class ags_progress {
     public const RESULT_ERROR = 'error';
 
     /**
+     * The AGS capability set the platform actually granted for the resource links of a connection (what it put into
+     * the launches), so that a platform without the partner plugin is judged by what it offers, not by a promise.
+     *
+     * @param \stdClass $con sender connection
+     * @return array links (int), progress (int: links granting the line items service with the lineitem and score
+     *               scopes, i.e. where a dedicated progress line item can be created and scored)
+     */
+    public static function capability_set(\stdClass $con): array {
+        global $DB;
+        // Few distinct combinations per deployment: group in SQL, judge the (JSON) line item scopes in PHP.
+        $rs = $DB->get_recordset_sql(
+            "SELECT s.lineitemscope, s.scorescope, s.hasurl, COUNT(1) AS c
+               FROM (SELECT lineitemscope, scorescope,
+                            CASE WHEN lineitemsservice IS NULL OR lineitemsservice = '' THEN 0 ELSE 1 END AS hasurl
+                       FROM {enrol_lti_resource_link}
+                      WHERE ltideploymentid = :dep) s
+           GROUP BY s.lineitemscope, s.scorescope, s.hasurl",
+            ['dep' => (int) $con->deploymentid]
+        );
+        $result = ['links' => 0, 'progress' => 0];
+        foreach ($rs as $row) {
+            $result['links'] += (int) $row->c;
+            $lineitemscopes = json_decode((string) $row->lineitemscope, true);
+            if (
+                (int) $row->hasurl === 1 && $row->scorescope === self::SCOPE_SCORE
+                && is_array($lineitemscopes) && in_array(self::SCOPE_LINEITEM, $lineitemscopes, true)
+            ) {
+                $result['progress'] += (int) $row->c;
+            }
+        }
+        $rs->close();
+        return $result;
+    }
+
+    /**
      * Post the progress of an outbox row.
      *
      * @param \stdClass $row outbox row

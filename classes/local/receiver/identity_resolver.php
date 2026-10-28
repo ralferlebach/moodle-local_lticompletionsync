@@ -32,16 +32,44 @@ class identity_resolver {
     /** @var string Translator of ltisource_ltipseudonym. */
     private const TRANSLATOR = '\\ltisource_ltipseudonym\\local\\proxy\\translator';
 
+    /** @var int Minimum translator API version this plugin relies on (ltisource_ltipseudonym 0.3.0). */
+    public const MIN_TRANSLATOR_API = 2;
+    /** @var string Rejection: the installed pseudonym plugin is older than the translator API this plugin needs. */
+    public const REASON_API = 'pseudonym_api_unsupported';
+
     /** @var string How the last identity was resolved: local_id or pseudonym. */
     public $method = '';
 
     /**
-     * Whether the pseudonym plugin offers the read-only translation service.
+     * API version of the installed ltisource_ltipseudonym translator: 0 when the plugin is absent, 1 when it has no
+     * declared version (releases before 0.3.0), otherwise its translator::API_VERSION (checked with defined()).
+     *
+     * @return int
+     */
+    public static function translator_api_version(): int {
+        if (!class_exists(self::TRANSLATOR)) {
+            return 0;
+        }
+        $constant = self::TRANSLATOR . '::API_VERSION';
+        return defined($constant) ? (int) constant($constant) : 1;
+    }
+
+    /**
+     * API version used by this resolver (tests override it to simulate older or absent plugins).
+     *
+     * @return int
+     */
+    protected function api_version(): int {
+        return self::translator_api_version();
+    }
+
+    /**
+     * Whether the pseudonym plugin offers the read-only translation service in a supported version.
      *
      * @return bool
      */
     public static function pseudonym_service_available(): bool {
-        return class_exists(self::TRANSLATOR)
+        return self::translator_api_version() >= self::MIN_TRANSLATOR_API
             && method_exists(self::TRANSLATOR, 'context_for')
             && method_exists(self::TRANSLATOR, 'user_of');
     }
@@ -62,7 +90,15 @@ class identity_resolver {
         if ($sub === '' || strlen($sub) > 255) {
             throw new rejection('identity_unresolved');
         }
-        if (self::pseudonym_service_available()) {
+        $api = $this->api_version();
+        if ($api > 0 && $api < self::MIN_TRANSLATOR_API) {
+            // The plugin ltisource_ltipseudonym is installed but older than the translator API this plugin was built against: a
+            // subject may be a pseudonym we cannot translate reliably. Fail closed, never guess a local id.
+            throw new rejection(self::REASON_API);
+        }
+        $usable = $api >= self::MIN_TRANSLATOR_API && method_exists(self::TRANSLATOR, 'context_for')
+            && method_exists(self::TRANSLATOR, 'user_of');
+        if ($usable) {
             $class = self::TRANSLATOR;
             try {
                 $translator = new $class();

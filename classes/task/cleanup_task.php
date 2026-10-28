@@ -41,6 +41,9 @@ class cleanup_task extends \core\task\scheduled_task {
      */
     public function execute() {
         endpoint::purge_jti();
+        // Safety net for deletions core reports without events (LTI tool types, enrol_lti registrations/deployments).
+        $counts = array_filter(\local_lticompletionsync\local\orphan_cleanup::sweep());
+        mtrace('local_lticompletionsync: orphan sweep ' . ($counts ? json_encode($counts) : 'nothing to remove'));
         mtrace('local_lticompletionsync: purged ' . journal::purge_old() . ' journal rows');
     }
 }

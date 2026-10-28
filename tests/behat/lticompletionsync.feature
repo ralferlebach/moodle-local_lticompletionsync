@@ -38,7 +38,8 @@ Feature: Completion sync connections and provider-managed completion of external
       | Confirmed and enabled     | 1         |
     And I press "Save changes"
     Then I should see "Receiver for tool \"Peer tool\""
-    And I should see "Accepts signed completion messages of this tool"
+    And I should see "Manual completion tracking, server-controlled"
+    And I should see "An automatic completion condition is not available (open core gate)."
     And I press "Disable"
     And I should see "Saved."
 
@@ -62,7 +63,7 @@ Feature: Completion sync connections and provider-managed completion of external
     And I am on the "Peer content" "lti activity" page logged in as "teacher1"
     When I navigate to "Completion sync" in current page administration
     Then I should see "Completion managed by the provider"
-    And I should see "Clicking it fails with a permission error"
+    And I should see "instead of the \"Mark as done\" button on the activity page"
     And I press "Let the provider manage completion"
     And I should see "Saved."
     And the following should exist in the "generaltable" table:
@@ -74,6 +75,29 @@ Feature: Completion sync connections and provider-managed completion of external
     And the following should exist in the "generaltable" table:
       | -1-                                            | -2- |
       | Completion managed by the provider             | No  |
+
+  Scenario: A locked-down learner sees the completion state set by the tool instead of a dead-end button
+    Given the following "local_lticompletionsync > receiver connections" exist:
+      | tool      | automanage |
+      | Peer tool | 0          |
+    And the following "mod_lti > tool instances" exist:
+      | name         | course | tool      | completion |
+      | Peer content | C1     | Peer tool | 1          |
+      | Free content | C1     | Peer tool | 1          |
+    And I am on the "Peer content" "lti activity" page logged in as "teacher1"
+    And I navigate to "Completion sync" in current page administration
+    And I press "Let the provider manage completion"
+    And I log out
+    When I am on the "Peer content" "lti activity" page logged in as "student1"
+    Then I should see "Not done yet." in the "[data-region=local-lticompletionsync-managed]" "css_element"
+    And I should see "is set by the external tool when you complete the activity there. You cannot mark it as done yourself here."
+    # No control in the activity header (4.5) or the page header actions (5.x). The 5.3 linear navigation footer renders
+    # its own control without a hook (documented boundary; annotated by JavaScript, covered by Playwright).
+    And "Mark as done" "button" should not exist in the ".activity-header" "css_element"
+    And "Mark as done" "button" should not exist in the "#page-header" "css_element"
+    And I am on the "Free content" "lti activity" page
+    And "Mark as done" "button" should exist
+    And I should not see "You cannot mark it as done yourself here."
 
   Scenario: An activity with automatic completion tracking is refused with the reason
     Given the following "local_lticompletionsync > receiver connections" exist:

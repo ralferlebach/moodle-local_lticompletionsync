@@ -100,6 +100,28 @@ test.describe.serial('pseudonymous subject: A (4.5 platform, own type) <- B (5.3
     await expect(page.locator('.local-lticompletionsync-journal')).toContainText('identity_unresolved');
   });
 
+  test('repair after the rotation: the next launch brings the new pseudonym; the old one stays closed', async ({ page }) => {
+    await page.context().clearCookies();
+    await launchAsLearner(page, seed, sc, 'a', 'b');
+    const tool = csync('b', { stage: 'toolrows', scenario: 'pa' });
+    expect(tool.subs.length).toBe(2); // A new tool account for the new pseudonym (auth_lti binding per subject).
+    runDispatchTasks('b');
+    csync('b', { stage: 'deliver' });
+    const rows = csync('b', { stage: 'toolrows', scenario: 'pa' }).rows;
+    const fresh = rows.find((r) => r.status === 'acked');
+    expect(fresh).toBeDefined();
+    const now = state(sc.learner);
+    expect(now.state).toBe(1);
+    expect(now.rcv.status).toBe('applied');
+    // Administrator requeue of the old dead letter: still unresolvable, it fails closed again (no wrong user).
+    expect(csync('b', { stage: 'requeue', scenario: 'pa' }).requeued).toBe(1);
+    csync('b', { stage: 'deliver' });
+    const again = csync('b', { stage: 'toolrows', scenario: 'pa' }).rows.find((r) => r.version === 2);
+    expect(again.status).toBe('dead');
+    expect(again.lasterror).toBe('identity_unresolved');
+    expect(state(learner2).state).toBe(0);
+  });
+
   test('CS-G6: tool_ltidiagnostics shows the transfer with its correlation id on both sites', () => {
     const toolside = csync('b', { stage: 'journal', from: t0 });
     expect(toolside.logstore).toBeGreaterThan(0);

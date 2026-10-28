@@ -19,11 +19,15 @@ namespace local_lticompletionsync\local\sender;
 use local_lticompletionsync\local\connection;
 
 /**
- * Tool side: maps a local completion change to the LTI 1.3 resource links (published enrol_lti resources) it
- * belongs to, and computes the provider state.
+ * Tool side: maps completion changes to the LTI 1.3 resource links (published enrol_lti resources) they belong to, and
+ * computes the provider state.
  *
  * A published activity reports its activity completion; a published course reports its course completion (read from
  * the stored course completion, never guessed from single activities).
+ *
+ * Bounded resources (CS-04): relation rows are read in keyset batches, provider states are read with one query per
+ * source and batch, and sender connections and course/module facts are cached per process run instead of being looked
+ * up per target. Nothing materialises all users of a course or connection.
  *
  * @package    local_lticompletionsync
  * @copyright  2026 Ralf Erlebach
@@ -34,6 +38,8 @@ class source {
     public const KIND_CM = 'cm';
     /** @var string Source kind: course completion. */
     public const KIND_COURSE = 'course';
+    /** @var int Default batch size of the keyset iterations and IN() lists. */
+    public const BATCH = 500;
 
     /** @var string Base SQL of the user/resource link relation (LTI 1.3 resources only). */
     private const BASE_SQL = "SELECT url.id AS urlid, rl.id AS resourcelinkid, rl.ltideploymentid, lu.toolid, lu.userid,
@@ -44,6 +50,50 @@ class source {
                                 JOIN {enrol_lti_resource_link} rl ON rl.id = url.resourcelinkid AND rl.resourceid = t.id
                                WHERE t.ltiversion = :ltiversion";
 
+    /** @var array deploymentid => connection row or false (per run). */
+    private static $senders = [];
+    /** @var array cmid => course id (per run). */
+    private static $cmcourses = [];
+    /** @var array "kind/sourceid" => bool completion available (per run). */
+    private static $enabled = [];
+    /** @var int Time the caches were started. */
+    private static $cachetime = 0;
+    /** @var int Maximum age of the caches in seconds (long-running cron processes, observers). */
+    private const CACHE_TTL = 30;
+
+    /**
+     * Forget the per-run caches (tasks call this at their start; tests after changing connections).
+     */
+    public static function reset_caches(): void {
+        self::$senders = [];
+        self::$cmcourses = [];
+        self::$enabled = [];
+        self::$cachetime = time();
+    }
+
+    /**
+     * Drop the caches when they are older than CACHE_TTL.
+     */
+    private static function fresh(): void {
+        if (time() - self::$cachetime > self::CACHE_TTL) {
+            self::reset_caches();
+        }
+    }
+
+    /**
+     * The enabled sender connection of a deployment (cached per run).
+     *
+     * @param int $deploymentid
+     * @return \stdClass|null
+     */
+    public static function sender_for_deployment(int $deploymentid): ?\stdClass {
+        self::fresh();
+        if (!array_key_exists($deploymentid, self::$senders)) {
+            self::$senders[$deploymentid] = connection::sender_for_deployment($deploymentid) ?? false;
+        }
+        return self::$senders[$deploymentid] ?: null;
+    }
+
     /**
      * Resource link targets of a user for a published context, with their enabled sender connection.
      *
@@ -52,27 +102,77 @@ class source {
      * @return \stdClass[] target objects: connection, resourcelinkid, toolid, userid, sourcekind, sourceid
      */
     public static function targets_for(int $userid, \context $context): array {
+        return self::targets_for_users($context, [$userid]);
+    }
+
+    /**
+     * Resource link targets of several users for one published context (one query).
+     *
+     * @param \context $context
+     * @param int[] $userids at most a few hundred (callers batch)
+     * @return \stdClass[]
+     */
+    public static function targets_for_users(\context $context, array $userids): array {
         global $DB;
+        if (!$userids || !in_array($context->contextlevel, [CONTEXT_MODULE, CONTEXT_COURSE])) {
+            return [];
+        }
+        [$insql, $params] = $DB->get_in_or_equal(
+            array_values(array_unique(array_map('intval', $userids))),
+            SQL_PARAMS_NAMED,
+            'u'
+        );
         $rows = $DB->get_records_sql(
-            self::BASE_SQL . ' AND lu.userid = :userid AND t.contextid = :contextid',
-            ['ltiversion' => 'LTI-1p3', 'userid' => $userid, 'contextid' => $context->id]
+            self::BASE_SQL . " AND t.contextid = :contextid AND lu.userid $insql",
+            ['ltiversion' => 'LTI-1p3', 'contextid' => $context->id] + $params
         );
         return self::with_connections($rows);
     }
 
     /**
-     * All resource link targets of an enabled sender connection (full reconcile).
+     * Walk all resource link targets of an enabled sender connection in keyset batches (full reconcile).
+     *
+     * @param \stdClass $con
+     * @param callable $fn called with each batch (\stdClass[] targets)
+     * @param int $batch
+     * @return int number of relation rows read
+     */
+    public static function each_target_batch(\stdClass $con, callable $fn, int $batch = self::BATCH): int {
+        global $DB;
+        $last = 0;
+        $read = 0;
+        while (true) {
+            $rows = $DB->get_records_sql(
+                self::BASE_SQL . ' AND rl.ltideploymentid = :dep AND url.id > :last ORDER BY url.id',
+                ['ltiversion' => 'LTI-1p3', 'dep' => $con->deploymentid, 'last' => $last],
+                0,
+                $batch
+            );
+            if (!$rows) {
+                break;
+            }
+            $read += count($rows);
+            $last = (int) end($rows)->urlid;
+            $fn(self::with_connections($rows));
+            if (count($rows) < $batch) {
+                break;
+            }
+        }
+        return $read;
+    }
+
+    /**
+     * All resource link targets of an enabled sender connection (small connections and tests only).
      *
      * @param \stdClass $con
      * @return \stdClass[]
      */
     public static function targets_of_connection(\stdClass $con): array {
-        global $DB;
-        $rows = $DB->get_records_sql(
-            self::BASE_SQL . ' AND rl.ltideploymentid = :dep',
-            ['ltiversion' => 'LTI-1p3', 'dep' => $con->deploymentid]
-        );
-        return self::with_connections($rows);
+        $all = [];
+        self::each_target_batch($con, function (array $targets) use (&$all) {
+            array_push($all, ...$targets);
+        });
+        return $all;
     }
 
     /**
@@ -84,7 +184,7 @@ class source {
     private static function with_connections(array $rows): array {
         $targets = [];
         foreach ($rows as $row) {
-            $con = connection::sender_for_deployment((int) $row->ltideploymentid);
+            $con = self::sender_for_deployment((int) $row->ltideploymentid);
             if (!$con) {
                 continue;
             }
@@ -106,7 +206,114 @@ class source {
     }
 
     /**
-     * Provider state of a target: 1 completed, 0 not completed, null when the source has no completion at all.
+     * Key of a target in the result of provider_states().
+     *
+     * @param \stdClass $target
+     * @return string
+     */
+    public static function state_key(\stdClass $target): string {
+        return $target->sourcekind . '/' . $target->sourceid . '/' . $target->userid;
+    }
+
+    /**
+     * Course of a course module (cached per run).
+     *
+     * @param int $cmid
+     * @return int 0 when the module does not exist
+     */
+    public static function course_of_cm(int $cmid): int {
+        global $DB;
+        self::fresh();
+        if (!array_key_exists($cmid, self::$cmcourses)) {
+            self::$cmcourses[$cmid] = (int) $DB->get_field('course_modules', 'course', ['id' => $cmid]);
+        }
+        return self::$cmcourses[$cmid];
+    }
+
+    /**
+     * Whether a source has completion at all (cached per run).
+     *
+     * @param string $kind
+     * @param int $sourceid
+     * @return bool
+     */
+    private static function source_enabled(string $kind, int $sourceid): bool {
+        global $CFG, $DB;
+        $key = $kind . '/' . $sourceid;
+        self::fresh();
+        if (array_key_exists($key, self::$enabled)) {
+            return self::$enabled[$key];
+        }
+        require_once($CFG->libdir . '/completionlib.php');
+        $enabled = false;
+        if ($kind === self::KIND_CM) {
+            $courseid = self::course_of_cm($sourceid);
+            if ($courseid) {
+                $cm = get_fast_modinfo($courseid)->get_cm($sourceid);
+                $enabled = (bool) (new \completion_info($cm->get_course()))->is_enabled($cm);
+            }
+        } else {
+            $course = $DB->get_record('course', ['id' => $sourceid]);
+            if ($course) {
+                $completion = new \completion_info($course);
+                $enabled = $completion->is_enabled() && $completion->has_criteria();
+            }
+        }
+        return self::$enabled[$key] = $enabled;
+    }
+
+    /**
+     * Provider states of many targets: one query per source and batch.
+     *
+     * @param \stdClass[] $targets
+     * @return array state_key => 1 completed, 0 not completed, null when the source has no completion
+     */
+    public static function provider_states(array $targets): array {
+        global $DB;
+        $bysource = [];
+        foreach ($targets as $target) {
+            $bysource[$target->sourcekind . '/' . $target->sourceid][(int) $target->userid] = true;
+        }
+        $states = [];
+        foreach ($bysource as $source => $users) {
+            [$kind, $sourceid] = explode('/', $source);
+            $sourceid = (int) $sourceid;
+            $userids = array_keys($users);
+            if (!self::source_enabled($kind, $sourceid)) {
+                foreach ($userids as $userid) {
+                    $states["$source/$userid"] = null;
+                }
+                continue;
+            }
+            foreach (array_chunk($userids, self::BATCH) as $chunk) {
+                [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'u');
+                if ($kind === self::KIND_CM) {
+                    $complete = $DB->get_records_select_menu(
+                        'course_modules_completion',
+                        "coursemoduleid = :src AND userid $insql AND completionstate IN (:c1, :c2)",
+                        ['src' => $sourceid, 'c1' => COMPLETION_COMPLETE, 'c2' => COMPLETION_COMPLETE_PASS] + $params,
+                        '',
+                        'userid, completionstate'
+                    );
+                } else {
+                    $complete = $DB->get_records_select_menu(
+                        'course_completions',
+                        "course = :src AND userid $insql AND timecompleted > 0",
+                        ['src' => $sourceid] + $params,
+                        '',
+                        'userid, timecompleted'
+                    );
+                }
+                foreach ($chunk as $userid) {
+                    $states["$source/$userid"] = isset($complete[$userid]) ? 1 : 0;
+                }
+            }
+        }
+        return $states;
+    }
+
+    /**
+     * Provider state of one target: 1 completed, 0 not completed, null when the source has no completion at all.
      *
      * @param string $kind
      * @param int $sourceid cmid or course id
@@ -114,31 +321,8 @@ class source {
      * @return int|null
      */
     public static function provider_state(string $kind, int $sourceid, int $userid): ?int {
-        global $CFG, $DB;
-        require_once($CFG->libdir . '/completionlib.php');
-        if ($kind === self::KIND_CM) {
-            $courseid = $DB->get_field('course_modules', 'course', ['id' => $sourceid]);
-            if (!$courseid) {
-                return null;
-            }
-            $cm = get_fast_modinfo($courseid)->get_cm($sourceid);
-            $completion = new \completion_info($cm->get_course());
-            if (!$completion->is_enabled($cm)) {
-                return null;
-            }
-            $data = $completion->get_data($cm, false, $userid);
-            return in_array((int) $data->completionstate, [COMPLETION_COMPLETE, COMPLETION_COMPLETE_PASS], true) ? 1 : 0;
-        }
-        $course = $DB->get_record('course', ['id' => $sourceid]);
-        if (!$course) {
-            return null;
-        }
-        $completion = new \completion_info($course);
-        if (!$completion->is_enabled() || !$completion->has_criteria()) {
-            return null;
-        }
-        $timecompleted = $DB->get_field('course_completions', 'timecompleted', ['userid' => $userid, 'course' => $sourceid]);
-        return empty($timecompleted) ? 0 : 1;
+        $target = (object) ['sourcekind' => $kind, 'sourceid' => $sourceid, 'userid' => $userid];
+        return self::provider_states([$target])[self::state_key($target)];
     }
 
     /**
@@ -150,7 +334,13 @@ class source {
      */
     public static function subject(int $userid, int $toolid): ?string {
         global $DB;
-        $sub = $DB->get_field('enrol_lti_users', 'sourceid', ['userid' => $userid, 'toolid' => $toolid]);
+        // After an account merge one user can hold several rows of the same resource: the latest launch wins.
+        $rows = $DB->get_fieldset_sql(
+            'SELECT sourceid FROM {enrol_lti_users} WHERE userid = :userid AND toolid = :toolid
+           ORDER BY lastaccess DESC, id DESC',
+            ['userid' => $userid, 'toolid' => $toolid]
+        );
+        $sub = $rows ? reset($rows) : null;
         return ($sub === false || $sub === null || $sub === '') ? null : (string) $sub;
     }
 }
